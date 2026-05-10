@@ -866,11 +866,12 @@ Read `{raw_file.relative_to(root).as_posix()}` in full and compile it into this 
 Follow `WIKI_SCHEMA.md`:
 
 1. Read `wiki/index.md`.
-2. Identify existing summaries, entities, concepts, comparisons, overview, or synthesis pages to update.
-3. Extract source-backed claims into claim ledgers.
-4. Add bidirectional wikilinks where appropriate.
-5. Run `cwiki index .`.
-6. Append to `wiki/log.md`.
+2. Preserve the source language. If the source is Chinese, write Chinese wiki pages; if it is English, write English wiki pages. Do not translate by default.
+3. Identify existing summaries, entities, concepts, comparisons, overview, or synthesis pages to update.
+4. Extract source-backed claims into claim ledgers.
+5. Add bidirectional wikilinks where appropriate.
+6. Run `cwiki index .`.
+7. Append to `wiki/log.md`.
 """,
         encoding="utf-8",
     )

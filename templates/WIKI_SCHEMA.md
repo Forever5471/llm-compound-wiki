@@ -29,6 +29,7 @@ wiki/
 ## Page Rules
 
 - All LLM-generated knowledge pages live under `wiki/`.
+- Preserve source language during ingest. Chinese sources should be compiled into Chinese wiki pages; English sources into English wiki pages. Do not translate by default unless the user explicitly asks.
 - Pick the most specific wiki section:
   - `wiki/summaries/<slug>.md` for source summaries and compact topic summaries
   - `wiki/entities/<slug>.md` for people, organizations, places, products, projects
@@ -93,16 +94,17 @@ What the wiki currently believes, in prose.
 1. Read the source in full. For long documents, process section by section.
 2. Read `wiki/index.md` and any relevant existing pages.
 3. Tell the user the likely pages and claims that will be added or updated.
-4. Write or update the right wiki pages:
+4. Preserve the source language in generated wiki content unless the user explicitly asks for translation.
+5. Write or update the right wiki pages:
    - `wiki/summaries/` for the source summary
    - `wiki/entities/` for durable entity pages
    - `wiki/concepts/` for reusable concepts
    - `wiki/comparisons/` when the source changes a comparison
    - `wiki/overview.md` and `wiki/synthesis.md` when the global map or thesis changes
-5. Add source-backed rows to the claim ledger.
-6. Add links from new pages to existing pages and from existing pages back to new pages where appropriate.
-7. Run `cwiki index .`.
-8. Append to `wiki/log.md`.
+6. Add source-backed rows to the claim ledger.
+7. Add links from new pages to existing pages and from existing pages back to new pages where appropriate.
+8. Run `cwiki index .`.
+9. Append to `wiki/log.md`.
 
 ## Query Workflow
 

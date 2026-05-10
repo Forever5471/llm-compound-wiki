@@ -80,6 +80,8 @@ python3 ../bin/cwiki.py capture . ./notes.md --title "项目笔记"
 
 `capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。
 
+摄入时默认保留原文件语言：中文资料会生成中文 wiki 页面，英文资料会生成英文 wiki 页面。只有在用户明确要求时才翻译。
+
 ### 4. 让智能体摄入
 
 用 Codex、Claude Code、OpenCode、Cursor 或其他能读写文件的 agent 打开生成的 wiki 目录，然后说：

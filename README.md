@@ -85,6 +85,8 @@ python3 ../bin/cwiki.py capture . ./notes.md --title "Project Notes"
 
 `capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`.
 
+Ingest preserves the source language by default: Chinese sources should produce Chinese wiki pages, English sources should produce English wiki pages. Translation only happens when the user explicitly asks for it.
+
 ### 4. Ask an Agent to Ingest
 
 Open the generated wiki folder in Codex, Claude Code, OpenCode, Cursor, or another filesystem-capable agent, then ask:

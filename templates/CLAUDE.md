@@ -53,6 +53,7 @@ wiki/             LLM-owned compiled knowledge layer
 - Do not put generated knowledge outside `wiki/`.
 - Do not treat `.cwiki/prompts/` as knowledge.
 - Every factual claim needs a source path or URL.
+- Preserve source language. Chinese sources should produce Chinese wiki pages; English sources should produce English wiki pages. Do not translate by default unless the user explicitly asks.
 - Prefer updating existing wiki pages over creating isolated pages.
 - Use Obsidian wikilinks like `[[retrieval-augmented-generation]]`.
 - Keep contradictions visible until resolved.
@@ -69,12 +70,13 @@ Action:
 
 1. Read the source in full.
 2. Read `wiki/index.md` and relevant existing wiki pages.
-3. Identify affected summaries, entities, concepts, comparisons, overview, and synthesis.
-4. Create or update pages under the correct `wiki/` section.
-5. Add source-backed claim ledger rows.
-6. Add bidirectional wikilinks where useful.
-7. Run `cwiki index .`.
-8. Append to `wiki/log.md`.
+3. Preserve the source language for generated wiki content unless the user explicitly asks for translation.
+4. Identify affected summaries, entities, concepts, comparisons, overview, and synthesis.
+5. Create or update pages under the correct `wiki/` section.
+6. Add source-backed claim ledger rows.
+7. Add bidirectional wikilinks where useful.
+8. Run `cwiki index .`.
+9. Append to `wiki/log.md`.
 
 ### Query
 

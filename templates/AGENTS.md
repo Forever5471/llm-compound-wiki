@@ -26,6 +26,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - Save generated knowledge inside the right `wiki/` section, not in a top-level side folder.
 - Use `[[slug]]` wikilinks for cross-references.
 - Cite source paths or URLs for factual claims.
+- Preserve source language during ingest. Chinese sources produce Chinese wiki pages; English sources produce English wiki pages. Do not translate by default unless the user asks.
 - Keep contradictions visible until resolved. Do not silently erase uncertainty.
 - Valuable query answers should be offered as updates to `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 - Use `cwiki lint .` periodically to find broken links, stale claims, and orphan pages.

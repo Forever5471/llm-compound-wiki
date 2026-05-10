@@ -144,6 +144,7 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertTrue((root / "raw" / "captures").exists())
             prompt = root / ".cwiki" / "prompts" / f"ingest-{dt.date.today().isoformat()}-some-article.md"
             self.assertTrue(prompt.exists())
+            self.assertIn("Preserve the source language", prompt.read_text())
 
     def test_ask_creates_query_prompt_from_wiki_context(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
