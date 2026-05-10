@@ -473,7 +473,7 @@ def compact_page_context(page: Page, max_chars: int = 3500) -> str:
     return text[:max_chars].rstrip() + "\n\n... [truncated for prompt context]"
 
 
-def create_query_prompt(target: str, question: str, top_k: int = DEFAULT_TOP_K) -> tuple[Path, list[tuple[Page, int]], str]:
+def create_query_prompt(target: str, question: str, top_k: int = DEFAULT_TOP_K) -> tuple[Path, Path, list[tuple[Page, int]], str, str]:
     root = Path(target).resolve()
     assert_wiki(root)
     pages = collect_pages(root)
@@ -481,7 +481,9 @@ def create_query_prompt(target: str, question: str, top_k: int = DEFAULT_TOP_K) 
     date = today()
     slug = slugify(question)
     ensure_dir(root / ".cwiki" / "prompts")
+    ensure_dir(root / ".cwiki" / "briefs")
     prompt_file = root / ".cwiki" / "prompts" / f"query-{date}-{slug}.md"
+    brief_file = root / ".cwiki" / "briefs" / f"brief-{date}-{slug}.md"
 
     if hits:
         context_sections = "\n\n".join(
@@ -536,13 +538,112 @@ status: pending
 {context_sections}
 """
     prompt_file.write_text(prompt, encoding="utf-8")
-    return prompt_file, hits, prompt
+    brief = render_human_brief(question, hits)
+    brief_file.write_text(brief, encoding="utf-8")
+    return prompt_file, brief_file, hits, prompt, brief
+
+
+def render_human_brief(question: str, hits: list[tuple[Page, int]]) -> str:
+    date = today()
+    if not hits:
+        return f"""---
+title: Brief - {question}
+tags: [query, brief]
+sources: 0
+updated: {date}
+status: draft
+---
+
+# Brief - {question}
+
+No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/index.md`, or ingest more sources before expecting a grounded answer.
+"""
+
+    relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}` — {page.summary}" for page, score in hits)
+    claims = "\n".join(extract_claim_bullets(page) for page, _ in hits)
+    syntheses = "\n".join(extract_section_bullet(page, "Synthesis") for page, _ in hits)
+    open_questions = "\n".join(extract_section_bullet(page, "Open Questions") for page, _ in hits)
+
+    return f"""---
+title: Brief - {question}
+tags: [query, brief]
+sources: {len(hits)}
+updated: {date}
+status: draft
+---
+
+# Brief - {question}
+
+This is a deterministic evidence brief generated from the compiled wiki. It is more readable than the model prompt, but it is not a full LLM-written answer.
+
+## Question
+
+{question}
+
+## Short Takeaway
+
+The wiki has relevant material in {len(hits)} page(s). Start with {', '.join(f'[[{page.slug}]]' for page, _ in hits[:3])}.
+
+## Relevant Pages
+
+{relevant_pages}
+
+## Key Claims
+
+{claims or '- No claim ledger rows found in the matched pages.'}
+
+## Existing Synthesis
+
+{syntheses or '- No synthesis sections found in the matched pages.'}
+
+## Open Questions And Gaps
+
+{open_questions or '- No explicit open questions found in the matched pages.'}
+
+## Next Step
+
+For a polished answer, run `cwiki answer` with an API key or give `.cwiki/prompts/query-*.md` to an agent.
+"""
+
+
+def extract_claim_bullets(page: Page, max_claims: int = 4) -> str:
+    lines = page.text.splitlines()
+    in_ledger = False
+    claims: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_ledger = stripped.lower() == "## claim ledger"
+            continue
+        if not in_ledger or not stripped.startswith("|") or stripped.startswith("|---") or "Claim" in stripped:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if cells:
+            claims.append(f"- [[{page.slug}]]: {cells[0]}")
+        if len(claims) >= max_claims:
+            break
+    return "\n".join(claims)
+
+
+def extract_section_bullet(page: Page, heading: str, max_chars: int = 420) -> str:
+    pattern = re.compile(rf"^##\s+{re.escape(heading)}\s*$", flags=re.IGNORECASE | re.MULTILINE)
+    match = pattern.search(page.text)
+    if not match:
+        return ""
+    start = match.end()
+    next_heading = re.search(r"^##\s+", page.text[start:], flags=re.MULTILINE)
+    end = start + next_heading.start() if next_heading else len(page.text)
+    body = re.sub(r"\s+", " ", page.text[start:end].strip())
+    if not body:
+        return ""
+    return f"- [[{page.slug}]]: {body[:max_chars]}"
 
 
 def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False) -> None:
     root = Path(target).resolve()
-    prompt_file, hits, prompt = create_query_prompt(target, question, top_k)
+    prompt_file, brief_file, hits, prompt, brief = create_query_prompt(target, question, top_k)
     print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
+    print(f"Created human brief: {brief_file.relative_to(root).as_posix()}")
     if hits:
         print("Relevant pages:")
         for page, score in hits:
@@ -550,6 +651,8 @@ def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_contex
     else:
         print("Relevant pages: no direct matches")
     if show_context:
+        print("\n--- Human Brief ---")
+        print(brief)
         print("\n--- Query Prompt ---")
         print(prompt)
 
@@ -567,10 +670,11 @@ def answer_wiki(
         raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai")
 
     root = Path(target).resolve()
-    prompt_file, hits, prompt = create_query_prompt(target, question, top_k)
+    prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(target, question, top_k)
     api_key = os.environ.get(api_key_env)
     if not api_key:
         print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
+        print(f"Created human brief: {brief_file.relative_to(root).as_posix()}")
         raise RuntimeError(f"Missing API key. Set {api_key_env}=... or use `cwiki ask` for context-only mode.")
 
     instructions = (

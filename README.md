@@ -149,9 +149,9 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
-`ask` does not call an LLM. It searches the compiled wiki, writes a query prompt under `.cwiki/prompts/`, and optionally prints the context pack with `--show-context`. Hand that prompt to Codex, Claude Code, or another agent to synthesize the answer from wiki pages.
+`ask` does not call an LLM. It searches the compiled wiki, writes a model-oriented query prompt under `.cwiki/prompts/`, and also writes a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
 
-`answer` calls a model and writes the draft answer under `.cwiki/answers/`. The first provider is OpenAI's Responses API and requires `OPENAI_API_KEY`. It still creates the same query prompt first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
+`answer` calls a model and writes the draft answer under `.cwiki/answers/`. The first provider is OpenAI's Responses API and requires `OPENAI_API_KEY`. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 
 ## Page Format
 

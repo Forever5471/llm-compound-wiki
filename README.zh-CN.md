@@ -144,9 +144,9 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
-`ask` 也不会直接调用大模型。它会搜索已经编译好的 wiki，在 `.cwiki/prompts/` 下生成 query prompt；加 `--show-context` 时会把上下文包打印出来。把这个 prompt 交给 Codex、Claude Code 或其他 agent，即可基于 wiki 页面综合回答。
+`ask` 也不会直接调用大模型。它会搜索已经编译好的 wiki，在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
 
-`answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。第一版 provider 是 OpenAI Responses API，需要设置 `OPENAI_API_KEY`。它会先生成同样的 query prompt，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
+`answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。第一版 provider 是 OpenAI Responses API，需要设置 `OPENAI_API_KEY`。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
 ## 页面规范
 

@@ -172,14 +172,20 @@ Retrieval finds relevant evidence before synthesis.
 
             result = run_cwiki("ask", str(root), "What does the wiki know about retrieval?")
             self.assertIn("Created query prompt:", result.stdout)
+            self.assertIn("Created human brief:", result.stdout)
             self.assertIn("[[retrieval]]", result.stdout)
 
             prompt = root / ".cwiki" / "prompts" / f"query-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
+            brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
+            self.assertTrue(brief.exists())
             text = prompt.read_text()
             self.assertIn("## Question", text)
             self.assertIn("[[retrieval]]", text)
             self.assertIn("Answer using local citations", text)
+            brief_text = brief.read_text()
+            self.assertIn("## Short Takeaway", brief_text)
+            self.assertIn("[[retrieval]]", brief_text)
 
     def test_ask_matches_mixed_chinese_english_query(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -236,9 +242,12 @@ Retrieval finds relevant evidence before synthesis.
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Created query prompt:", result.stdout)
+            self.assertIn("Created human brief:", result.stdout)
             self.assertIn("Missing API key", result.stderr)
             prompt = root / ".cwiki" / "prompts" / f"query-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
+            brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
+            self.assertTrue(brief.exists())
 
 
 if __name__ == "__main__":
