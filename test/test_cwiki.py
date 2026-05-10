@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -150,6 +151,28 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertTrue(prompt.exists())
             self.assertIn("Preserve the source language", prompt.read_text())
 
+    def test_capture_extracts_docx_text(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Docx capture test")
+            docx = root / "source.docx"
+            document_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>中文 DOCX 摄入测试</w:t></w:r></w:p>
+    <w:p><w:r><w:t>保留源语言。</w:t></w:r></w:p>
+  </w:body>
+</w:document>
+"""
+            with zipfile.ZipFile(docx, "w") as archive:
+                archive.writestr("word/document.xml", document_xml)
+
+            run_cwiki("capture", str(root), str(docx), "--title", "DOCX 测试")
+            raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-docx-测试.md"
+            raw = raw_file.read_text()
+            self.assertIn("type: docx", raw)
+            self.assertIn("中文 DOCX 摄入测试", raw)
+
     def test_ask_creates_query_prompt_from_wiki_context(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
@@ -259,6 +282,47 @@ RPA 自愈通过候选召回、语义匹配、风险分级和结果校验恢复�
 
             result = run_cwiki("ask", str(root), "如何实现rpa自愈？")
             self.assertIn("[[rpa-self-healing]]", result.stdout)
+
+    def test_hybrid_search_uses_wikilink_relationships(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Hybrid search test")
+            (root / "wiki" / "concepts" / "semantic-self-healing-engine.md").write_text(
+                """---
+title: 语义自愈引擎
+kind: concept
+tags: [rpa]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# 语义自愈引擎
+
+该引擎处理定位失败后的恢复，并关联 [[gray-zone-arbitration]]。
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "gray-zone-arbitration.md").write_text(
+                """---
+title: 灰区仲裁设计
+kind: concept
+tags: [rpa]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# 灰区仲裁设计
+
+Top-K 不确定时进入裁决。
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("ask", str(root), "定位失败后怎么恢复？")
+            self.assertIn("[[semantic-self-healing-engine]]", result.stdout)
+            self.assertIn("[[gray-zone-arbitration]]", result.stdout)
 
     def test_answer_without_api_key_creates_prompt_and_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:

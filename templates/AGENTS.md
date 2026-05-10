@@ -19,6 +19,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - `.claude/skills/` contains the canonical skill definitions.
 - `.agents/skills/` contains compatibility entrypoints for other agents.
 - If both exist, prefer `.claude/skills/<skill>/SKILL.md` as the source of truth.
+- Use `wiki-capture` before `wiki-ingest` when a source file or URL still needs to be recorded under `raw/captures/`.
 
 ## Operating Principles
 

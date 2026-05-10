@@ -76,9 +76,10 @@ python3 ../bin/cwiki.py lint .
 ```bash
 python3 ../bin/cwiki.py capture . https://example.com/article --title "示例文章"
 python3 ../bin/cwiki.py capture . ./notes.md --title "项目笔记"
+python3 ../bin/cwiki.py capture . ./产品方案.docx --title "产品方案"
 ```
 
-`capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。
+`capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。当前支持 URL 记录、UTF-8 文本/Markdown、`.docx` 正文抽取；`.pdf` 会优先调用本机 `pdftotext`，如果环境没有该命令，会明确提示先转换为 UTF-8 文本再捕获。
 
 摄入时默认保留原文件语言：中文资料会生成中文 wiki 页面，英文资料会生成英文 wiki 页面。只有在用户明确要求时才翻译。
 
@@ -146,7 +147,7 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
-`ask` 也不会直接调用大模型。它会搜索已经编译好的 wiki，在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+`ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
 
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
@@ -215,7 +216,7 @@ status: active
 
 初始化后的 wiki 会同时生成 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议。
 
-同时会生成 `wiki-init`、`wiki-ingest`、`wiki-query`、`wiki-update`、`wiki-lint` 五个技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
+同时会生成 `wiki-init`、`wiki-capture`、`wiki-ingest`、`wiki-query`、`wiki-update`、`wiki-lint` 六个技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
 
 ## 开源定位
 

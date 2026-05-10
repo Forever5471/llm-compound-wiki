@@ -81,9 +81,10 @@ Put source files under `my-wiki/raw/`, or capture a URL/file:
 ```bash
 python3 ../bin/cwiki.py capture . https://example.com/article --title "Example Article"
 python3 ../bin/cwiki.py capture . ./notes.md --title "Project Notes"
+python3 ../bin/cwiki.py capture . ./product-plan.docx --title "Product Plan"
 ```
 
-`capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`.
+`capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`. It currently supports URL records, UTF-8 text/Markdown, and `.docx` body extraction. For `.pdf`, it uses the local `pdftotext` command when available; otherwise it asks you to convert the PDF to UTF-8 text first.
 
 Ingest preserves the source language by default: Chinese sources should produce Chinese wiki pages, English sources should produce English wiki pages. Translation only happens when the user explicitly asks for it.
 
@@ -151,7 +152,7 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
-`ask` does not call an LLM. It searches the compiled wiki, writes a model-oriented query prompt under `.cwiki/prompts/`, and also writes a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
+`ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
 
 `answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 
@@ -220,7 +221,7 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 
 `CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
 
-The generated wiki also includes `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
+The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
 
 ## Design Principles
 

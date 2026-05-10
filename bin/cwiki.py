@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import unicodedata
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib import error as urlerror
 from urllib import request
 from urllib.parse import urlparse
+from xml.etree import ElementTree
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,6 +62,25 @@ STOPWORDS = {
     "结论",
     "如何",
 }
+SYNONYM_SEEDS = {
+    "gray": ["灰区", "模糊", "仲裁"],
+    "zone": ["区域", "灰区"],
+    "gray_zone": ["灰区", "模糊样本", "仲裁"],
+    "self": ["自动", "自主"],
+    "healing": ["自愈", "恢复", "修复"],
+    "rpa": ["自动化", "流程"],
+    "llm": ["大模型", "模型"],
+    "answer": ["问答", "回答"],
+    "query": ["检索", "查询", "提问"],
+    "capture": ["捕获", "摄入", "解析"],
+    "自愈": ["self", "healing", "恢复", "修复"],
+    "灰区": ["gray", "zone", "gray_zone", "模糊", "仲裁"],
+    "仲裁": ["rerank", "re-ranker", "裁决", "判断"],
+    "检索": ["search", "retrieval", "query", "召回"],
+    "问答": ["answer", "qa", "回答"],
+    "摄入": ["capture", "ingest", "解析"],
+}
+VECTOR_DIMENSIONS = 128
 
 
 @dataclass
@@ -459,23 +483,58 @@ def search_wiki(target: str, query: str) -> None:
 
 
 def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int]]:
-    terms = query_terms(query)
+    terms = expand_terms(query_terms(query))
     if not terms:
         terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term]
     if not terms:
         return []
-    hits: list[tuple[Page, int]] = []
+    query_vector = text_vector(" ".join(terms) + "\n" + query)
+    direct_scores: dict[str, int] = {}
+    raw_scores: dict[str, float] = {}
+    pages_by_slug = {page.slug: page for page in pages}
+
     for page in pages:
         haystack = f"{page.title}\n{page.summary}\n{page.tags}\n{page.text}".lower()
         title_slug = f"{page.title} {page.slug}".lower()
-        score = sum(haystack.count(term) for term in terms)
-        score += sum(title_slug.count(term) * 4 for term in terms)
+        keyword_score = sum(haystack.count(term) for term in terms)
+        keyword_score += sum(title_slug.count(term) * 4 for term in terms)
         if query.lower() in haystack:
-            score += 3
-        if score > 0:
-            hits.append((page, score))
+            keyword_score += 3
+        direct_scores[page.slug] = keyword_score
+
+        vector_score = cosine_similarity(query_vector, text_vector(haystack))
+        if keyword_score > 0 or vector_score >= 0.18:
+            raw_scores[page.slug] = keyword_score + (vector_score * 12)
+
+    for page in pages:
+        if direct_scores.get(page.slug, 0) <= 0:
+            continue
+        relation_boost = max(1.0, min(4.0, direct_scores[page.slug] / 4))
+        for linked_slug in page.links:
+            if linked_slug in pages_by_slug:
+                raw_scores[linked_slug] = raw_scores.get(linked_slug, 0.0) + relation_boost
+        for backlink in pages:
+            if page.slug in backlink.links:
+                raw_scores[backlink.slug] = raw_scores.get(backlink.slug, 0.0) + relation_boost
+
+    hits = [(pages_by_slug[slug], max(1, round(score))) for slug, score in raw_scores.items() if score > 0]
     hits.sort(key=lambda hit: (-hit[1], hit[0].slug))
     return hits[:limit]
+
+
+def expand_terms(terms: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for term in terms:
+        expanded.append(term)
+        expanded.extend(SYNONYM_SEEDS.get(term, []))
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for term in expanded:
+        lowered = term.lower()
+        if lowered not in seen:
+            seen.add(lowered)
+            deduped.append(lowered)
+    return deduped
 
 
 def query_terms(query: str) -> list[str]:
@@ -499,6 +558,40 @@ def query_terms(query: str) -> list[str]:
             seen.add(term)
             deduped.append(term)
     return deduped
+
+
+def semantic_tokens(text: str) -> list[str]:
+    normalized = text.lower()
+    tokens = re.findall(r"[a-z0-9_+-]+|[\u4e00-\u9fa5]{2,}", normalized)
+    result: list[str] = []
+    for token in tokens:
+        if token in STOPWORDS:
+            continue
+        result.append(token)
+        if re.fullmatch(r"[\u4e00-\u9fa5]{3,}", token):
+            result.extend(token[i : i + 2] for i in range(len(token) - 1))
+    return result
+
+
+def text_vector(text: str, dimensions: int = VECTOR_DIMENSIONS) -> list[float]:
+    vector = [0.0] * dimensions
+    for token in semantic_tokens(text):
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "big") % dimensions
+        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+        vector[bucket] += sign
+    return vector
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right))
+    if dot == 0:
+        return 0.0
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return max(0.0, dot / (left_norm * right_norm))
 
 
 def compact_page_context(page: Page, max_chars: int = 3500) -> str:
@@ -1006,6 +1099,74 @@ def infer_title(source: str) -> str:
     return Path(source).stem.replace("-", " ").replace("_", " ")
 
 
+def read_source_text(path: Path) -> tuple[str, str]:
+    suffix = path.suffix.lower()
+    if suffix in {"", ".txt", ".md", ".markdown", ".csv", ".json", ".yaml", ".yml"}:
+        return path.read_text(encoding="utf-8"), "text"
+    if suffix == ".docx":
+        return extract_docx_text(path), "docx"
+    if suffix == ".pdf":
+        return extract_pdf_text(path), "pdf"
+    try:
+        return path.read_text(encoding="utf-8"), "text"
+    except UnicodeDecodeError as error:
+        raise RuntimeError(
+            f"Unsupported or non-UTF-8 source file: {path}. "
+            "Convert it to UTF-8 text first, or use a supported .txt, .md, .docx, or text-extractable .pdf file."
+        ) from error
+
+
+def extract_docx_text(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml = archive.read("word/document.xml")
+    except KeyError as error:
+        raise RuntimeError(f"Invalid .docx file, missing word/document.xml: {path}") from error
+    except zipfile.BadZipFile as error:
+        raise RuntimeError(f"Invalid .docx file: {path}") from error
+
+    root = ElementTree.fromstring(xml)
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+    for paragraph in root.findall(".//w:p", namespace):
+        parts: list[str] = []
+        for node in paragraph.iter():
+            if node.tag == f"{{{namespace['w']}}}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{{{namespace['w']}}}tab":
+                parts.append("\t")
+            elif node.tag == f"{{{namespace['w']}}}br":
+                parts.append("\n")
+        text = "".join(parts).strip()
+        if text:
+            paragraphs.append(text)
+    extracted = "\n\n".join(paragraphs).strip()
+    if not extracted:
+        raise RuntimeError(f"No text could be extracted from .docx file: {path}")
+    return extracted
+
+
+def extract_pdf_text(path: Path) -> str:
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        raise RuntimeError(
+            "PDF capture requires the `pdftotext` command on PATH. "
+            "Install poppler or convert the PDF to UTF-8 text, then run `cwiki capture` on the extracted text file."
+        )
+    result = subprocess.run(
+        [pdftotext, "-layout", str(path), "-"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"PDF text extraction failed for {path}: {result.stderr.strip() or 'unknown error'}")
+    text = result.stdout.strip()
+    if not text:
+        raise RuntimeError(f"No text could be extracted from PDF file: {path}")
+    return text
+
+
 def capture_source(target: str, source: str, title: str | None) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
@@ -1035,12 +1196,12 @@ Agent instruction: fetch this URL, read it in full, and compile it into the wiki
         absolute = Path(source).resolve()
         if not absolute.is_file():
             raise RuntimeError(f"Not a file: {absolute}")
-        text = absolute.read_text(encoding="utf-8")
+        text, source_type = read_source_text(absolute)
         body = f"""---
 title: {source_title}
 source: {absolute}
 captured: {date}
-type: file
+type: {source_type}
 ---
 
 # {source_title}
