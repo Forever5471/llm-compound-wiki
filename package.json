@@ -1,0 +1,27 @@
+{
+  "name": "llm-compound-wiki",
+  "version": "0.1.0",
+  "description": "A portable scaffold and CLI for LLM-maintained compounding wikis.",
+  "type": "module",
+  "bin": {
+    "cwiki": "./bin/cwiki.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node ./bin/cwiki.mjs --help",
+    "check": "npm test && node ./bin/cwiki.mjs --help"
+  },
+  "keywords": [
+    "llm",
+    "wiki",
+    "obsidian",
+    "knowledge-base",
+    "markdown",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

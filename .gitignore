@@ -1,0 +1,10 @@
+node_modules/
+.DS_Store
+
+# User-owned source material can be large or private.
+raw/**
+!raw/.gitkeep
+
+# Local agent/browser caches
+.codex/
+.claude/settings.local.json
