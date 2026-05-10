@@ -145,7 +145,7 @@ cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
-cwiki answer <dir> <question> [--provider openai] [--model gpt-5.2] [--top-k 6]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -153,7 +153,30 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `ask` does not call an LLM. It searches the compiled wiki, writes a model-oriented query prompt under `.cwiki/prompts/`, and also writes a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
 
-`answer` calls a model and writes the draft answer under `.cwiki/answers/`. The first provider is OpenAI's Responses API and requires `OPENAI_API_KEY`. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
+`answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
+
+## Model Configuration
+
+Create a local `.env` in either this project directory or a specific wiki directory. `.env` is ignored by git and is the right place for API keys:
+
+```bash
+CWIKI_PROVIDER=glm
+CWIKI_GLM_MODEL=glm-4.6v
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+GLM_API_KEY=your-local-key
+```
+
+Then run:
+
+```bash
+python3 ../bin/cwiki.py answer . "How is gray_zone designed?"
+```
+
+You can also override the provider and model per command:
+
+```bash
+python3 ../bin/cwiki.py answer . "How is gray_zone designed?" --provider glm --model glm-4.6v
+```
 
 ## Page Format
 

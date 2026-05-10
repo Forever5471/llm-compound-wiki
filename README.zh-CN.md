@@ -140,7 +140,7 @@ cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
-cwiki answer <dir> <question> [--provider openai] [--model gpt-5.2] [--top-k 6]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -148,7 +148,30 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `ask` 也不会直接调用大模型。它会搜索已经编译好的 wiki，在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
 
-`answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。第一版 provider 是 OpenAI Responses API，需要设置 `OPENAI_API_KEY`。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
+`answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
+
+## 模型配置
+
+可以在项目目录或具体 wiki 目录下创建本地 `.env`。`.env` 默认不进 git，适合放 API key：
+
+```bash
+CWIKI_PROVIDER=glm
+CWIKI_GLM_MODEL=glm-4.6v
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+GLM_API_KEY=your-local-key
+```
+
+然后直接运行：
+
+```bash
+python3 ../bin/cwiki.py answer . "gray_zone是怎么设计的"
+```
+
+也可以在命令行临时覆盖：
+
+```bash
+python3 ../bin/cwiki.py answer . "gray_zone是怎么设计的" --provider glm --model glm-4.6v
+```
 
 ## 页面规范
 

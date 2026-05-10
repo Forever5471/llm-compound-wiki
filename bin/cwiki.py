@@ -22,6 +22,9 @@ TEMPLATE_ROOT = PROJECT_ROOT / "templates"
 WIKI_SECTIONS = ["summaries", "entities", "concepts", "comparisons"]
 IGNORED_WIKI_FILES = {"index.md", "log.md"}
 DEFAULT_TOP_K = 6
+DEFAULT_OPENAI_MODEL = "gpt-5.2"
+DEFAULT_GLM_MODEL = "glm-4.6v"
+DEFAULT_GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 STOPWORDS = {
     "a",
     "an",
@@ -78,6 +81,25 @@ def today() -> str:
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def load_local_env(root: Path) -> None:
+    for env_file in (PROJECT_ROOT / ".env", Path.cwd() / ".env", root / ".env"):
+        load_dotenv(env_file)
 
 
 def write_if_missing(path: Path, content: str) -> bool:
@@ -193,7 +215,7 @@ def init_wiki(target: str, domain: str | None) -> None:
         write_if_missing(root / "wiki" / section / ".gitkeep", "")
     write_if_missing(
         root / ".gitignore",
-        "raw/**\n!raw/.gitkeep\n.cwiki/prompts/**\n!.cwiki/prompts/.gitkeep\n.DS_Store\n",
+        "raw/**\n!raw/.gitkeep\n.cwiki/prompts/**\n!.cwiki/prompts/.gitkeep\n.env\n.DS_Store\n",
     )
 
     replacements = {"{{domain}}": wiki_domain, "{{date}}": date}
@@ -662,14 +684,21 @@ def answer_wiki(
     question: str,
     top_k: int,
     provider: str,
-    model: str,
-    api_key_env: str,
+    model: str | None,
+    api_key_env: str | None,
+    base_url: str | None,
     max_output_tokens: int,
 ) -> int:
-    if provider != "openai":
-        raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai")
-
     root = Path(target).resolve()
+    load_local_env(root)
+    provider = (provider or os.environ.get("CWIKI_PROVIDER") or "openai").lower()
+    model = resolve_model(provider, model)
+    api_key_env = resolve_api_key_env(provider, api_key_env)
+    base_url = resolve_base_url(provider, base_url)
+
+    if provider not in {"openai", "glm"}:
+        raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai, glm")
+
     prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(target, question, top_k)
     api_key = os.environ.get(api_key_env)
     if not api_key:
@@ -683,13 +712,48 @@ def answer_wiki(
         "If the context is insufficient, say exactly what is missing. "
         "Do not invent facts outside the context pack."
     )
-    answer = call_openai_responses(api_key, model, instructions, prompt, max_output_tokens)
+    if provider == "openai":
+        answer = call_openai_responses(api_key, model, instructions, prompt, max_output_tokens)
+    else:
+        answer = call_openai_compatible_chat(
+            api_key=api_key,
+            base_url=base_url,
+            provider_name="GLM",
+            model=model,
+            instructions=instructions,
+            prompt=prompt,
+            max_output_tokens=max_output_tokens,
+        )
     answer_file = write_answer_file(root, question, answer, prompt_file, hits, provider, model)
 
     print(answer)
     print(f"\nSaved answer: {answer_file.relative_to(root).as_posix()}")
     print(f"Query prompt: {prompt_file.relative_to(root).as_posix()}")
     return 0
+
+
+def resolve_model(provider: str, model: str | None) -> str:
+    if model:
+        return model
+    if provider == "glm":
+        return os.environ.get("CWIKI_GLM_MODEL") or os.environ.get("CWIKI_MODEL") or DEFAULT_GLM_MODEL
+    return os.environ.get("CWIKI_OPENAI_MODEL") or os.environ.get("CWIKI_MODEL") or DEFAULT_OPENAI_MODEL
+
+
+def resolve_api_key_env(provider: str, api_key_env: str | None) -> str:
+    if api_key_env:
+        return api_key_env
+    if provider == "glm":
+        return os.environ.get("CWIKI_GLM_API_KEY_ENV") or "GLM_API_KEY"
+    return os.environ.get("CWIKI_OPENAI_API_KEY_ENV") or "OPENAI_API_KEY"
+
+
+def resolve_base_url(provider: str, base_url: str | None) -> str:
+    if base_url:
+        return base_url.rstrip("/")
+    if provider == "glm":
+        return (os.environ.get("GLM_BASE_URL") or DEFAULT_GLM_BASE_URL).rstrip("/")
+    return "https://api.openai.com/v1"
 
 
 def call_openai_responses(api_key: str, model: str, instructions: str, prompt: str, max_output_tokens: int) -> str:
@@ -721,6 +785,69 @@ def call_openai_responses(api_key: str, model: str, instructions: str, prompt: s
     if not text:
         raise RuntimeError("OpenAI API returned no text output.")
     return text
+
+
+def call_openai_compatible_chat(
+    api_key: str,
+    base_url: str,
+    provider_name: str,
+    model: str,
+    instructions: str,
+    prompt: str,
+    max_output_tokens: int,
+) -> str:
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_output_tokens,
+    }
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    req = request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{provider_name} API error ({error.code}): {body}") from error
+    except urlerror.URLError as error:
+        raise RuntimeError(f"{provider_name} API request failed: {error}") from error
+
+    text = extract_chat_completion_text(data)
+    if not text:
+        raise RuntimeError(f"{provider_name} API returned no text output.")
+    return text
+
+
+def extract_chat_completion_text(data: dict[str, object]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    chunks: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            chunks.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
 
 
 def extract_response_text(data: dict[str, object]) -> str:
@@ -889,7 +1016,7 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki init ./my-wiki --domain "AI research notes"
   cwiki capture . https://example.com/article --title "Example Article"
   cwiki ask . "What does this wiki know about retrieval?"
-  cwiki answer . "What does this wiki know about retrieval?" --model gpt-5.2
+  cwiki answer . "What does this wiki know about retrieval?" --provider glm --model glm-4.6v
   cwiki search . "retrieval"
   cwiki lint .
 """,
@@ -920,9 +1047,10 @@ def build_parser() -> argparse.ArgumentParser:
     answer_parser.add_argument("dir")
     answer_parser.add_argument("question", nargs="+")
     answer_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
-    answer_parser.add_argument("--provider", default="openai")
-    answer_parser.add_argument("--model", default=os.environ.get("CWIKI_OPENAI_MODEL", "gpt-5.2"))
-    answer_parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    answer_parser.add_argument("--provider", default=None)
+    answer_parser.add_argument("--model", default=None)
+    answer_parser.add_argument("--api-key-env", default=None)
+    answer_parser.add_argument("--base-url", default=None)
     answer_parser.add_argument("--max-output-tokens", type=int, default=1200)
 
     capture_parser = subparsers.add_parser("capture", help="Capture a source and create an ingest prompt")
@@ -959,6 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.provider,
                 args.model,
                 args.api_key_env,
+                args.base_url,
                 args.max_output_tokens,
             )
         elif args.command == "capture":

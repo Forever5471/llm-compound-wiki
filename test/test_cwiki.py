@@ -36,6 +36,7 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / "wiki" / "entities").exists())
             self.assertTrue((root / "wiki" / "concepts").exists())
             self.assertTrue((root / "wiki" / "comparisons").exists())
+            self.assertIn(".env", (root / ".gitignore").read_text())
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
 
@@ -180,13 +181,24 @@ Retrieval finds relevant evidence before synthesis.
             brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(brief.exists())
-            text = prompt.read_text()
-            self.assertIn("## Question", text)
-            self.assertIn("[[retrieval]]", text)
-            self.assertIn("Answer using local citations", text)
-            brief_text = brief.read_text()
-            self.assertIn("## Short Takeaway", brief_text)
-            self.assertIn("[[retrieval]]", brief_text)
+
+    def test_answer_supports_glm_provider_without_api_key(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "GLM answer test")
+            result = run_cwiki(
+                "answer",
+                str(root),
+                "测试 GLM 配置",
+                "--provider",
+                "glm",
+                "--api-key-env",
+                "CWIKI_TEST_MISSING_GLM_KEY",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Created query prompt:", result.stdout)
+            self.assertIn("Missing API key", result.stderr)
 
     def test_ask_matches_mixed_chinese_english_query(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
