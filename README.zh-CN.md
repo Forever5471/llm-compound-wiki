@@ -81,6 +81,8 @@ python3 ../bin/cwiki.py capture . ./产品方案.docx --title "产品方案"
 
 `capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。当前支持 URL 记录、UTF-8 文本/Markdown、`.docx` 正文抽取；`.pdf` 会优先调用本机 `pdftotext`，如果环境没有该命令，会明确提示先转换为 UTF-8 文本再捕获。
 
+复杂格式建议交给专门 skill：`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`。这些技能会优先建议复用 Docling、MarkItDown、MinerU、Unstructured 等开源解析工具；如果环境没有这些工具，再退回到 CLI 内置的轻量解析或明确提示人工转换。
+
 摄入时默认保留原文件语言：中文资料会生成中文 wiki 页面，英文资料会生成英文 wiki 页面。只有在用户明确要求时才翻译。
 
 ### 4. 让智能体摄入
@@ -216,7 +218,7 @@ status: active
 
 初始化后的 wiki 会同时生成 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议。
 
-同时会生成 `wiki-init`、`wiki-capture`、`wiki-ingest`、`wiki-query`、`wiki-update`、`wiki-lint` 六个技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
+同时会生成 `wiki-init`、`wiki-capture`、`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-ingest`、`wiki-query`、`wiki-update`、`wiki-lint` 等技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
 
 ## 开源定位
 

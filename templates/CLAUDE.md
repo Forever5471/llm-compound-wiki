@@ -66,7 +66,7 @@ wiki/             LLM-owned compiled knowledge layer
 
 Trigger when the user says: ingest, process, add to wiki, summarize this source, read this URL/file, or points to a raw source.
 
-If the source has not been captured yet, use `wiki-capture` first. `cwiki capture` supports URL records, UTF-8 text/Markdown, `.docx` extraction, and text-extractable `.pdf` files when `pdftotext` is available.
+If the source has not been captured yet, use `wiki-capture` first. For complex formats, route through the dedicated parser skills before ingest: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, or `wiki-parse-pptx`.
 
 Action:
 

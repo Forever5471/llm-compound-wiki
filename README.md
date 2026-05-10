@@ -86,6 +86,8 @@ python3 ../bin/cwiki.py capture . ./product-plan.docx --title "Product Plan"
 
 `capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`. It currently supports URL records, UTF-8 text/Markdown, and `.docx` body extraction. For `.pdf`, it uses the local `pdftotext` command when available; otherwise it asks you to convert the PDF to UTF-8 text first.
 
+For complex formats, use the dedicated skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, and `wiki-parse-pptx`. These skills prefer reusing open-source parsers such as Docling, MarkItDown, MinerU, or Unstructured when available; otherwise they fall back to lightweight CLI parsing or explicit conversion guidance.
+
 Ingest preserves the source language by default: Chinese sources should produce Chinese wiki pages, English sources should produce English wiki pages. Translation only happens when the user explicitly asks for it.
 
 ### 4. Ask an Agent to Ingest
@@ -221,7 +223,7 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 
 `CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
 
-The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
+The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
 
 ## Design Principles
 

@@ -43,6 +43,10 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-parse-pdf" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-parse-image" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-parse-pptx" / "SKILL.md").exists())
 
             self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text())
             claude = (root / "CLAUDE.md").read_text()
