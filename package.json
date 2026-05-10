@@ -7,9 +7,10 @@
     "cwiki": "./bin/cwiki.mjs"
   },
   "scripts": {
-    "test": "node --test",
-    "lint": "node ./bin/cwiki.mjs --help",
-    "check": "npm test && node ./bin/cwiki.mjs --help"
+    "test": "python3 -m unittest discover -s test -p 'test_*.py'",
+    "test:node-compat": "node --test",
+    "lint": "python3 ./bin/cwiki.py --help",
+    "check": "python3 -m unittest discover -s test -p 'test_*.py' && node --test && python3 ./bin/cwiki.py --help"
   },
   "keywords": [
     "llm",
@@ -23,5 +24,6 @@
   "license": "MIT",
   "engines": {
     "node": ">=18"
-  }
+  },
+  "notes": "The primary implementation is Python. The Node entrypoint is a compatibility wrapper for npm installs."
 }

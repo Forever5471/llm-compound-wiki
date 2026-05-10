@@ -6,7 +6,7 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 
 - 不绑定 Claude，Codex、Claude Code、OpenCode、Cursor 或其他能读写文件的 agent 都能使用
 - 默认兼容 Obsidian 的 Markdown 和 `[[wikilink]]`
-- 提供零依赖 CLI，能初始化、索引、搜索、捕获来源、健康检查
+- 提供零依赖 Python CLI，能初始化、索引、搜索、捕获来源、健康检查
 - 明确区分 `raw/` 原始证据和 LLM 完全拥有的 `wiki/` 编译知识层
 
 ## 为什么要做
@@ -52,13 +52,13 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 ## 快速开始
 
 ```bash
-node ./bin/cwiki.mjs init ./my-wiki --domain "AI 研究笔记"
+python3 ./bin/cwiki.py init ./my-wiki --domain "AI 研究笔记"
 cd my-wiki
-node ../bin/cwiki.mjs capture . https://example.com/article --title "示例文章"
-node ../bin/cwiki.mjs lint .
+python3 ../bin/cwiki.py capture . https://example.com/article --title "示例文章"
+python3 ../bin/cwiki.py lint .
 ```
 
-如果作为 npm 包安装：
+如果仍然想要 npm 风格的全局 `cwiki` 命令，也可以安装；npm 入口只是转发到 Python：
 
 ```bash
 npm install -g .
@@ -66,6 +66,8 @@ cwiki init ./my-wiki --domain "竞品研究"
 cwiki search ./my-wiki "pricing"
 cwiki lint ./my-wiki
 ```
+
+仓库仍保留 `bin/cwiki.mjs` 作为 npm/Node 兼容包装器，但实际实现已经迁到 `bin/cwiki.py`。
 
 ## 命令
 

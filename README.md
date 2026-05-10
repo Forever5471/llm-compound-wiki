@@ -8,7 +8,7 @@ It is inspired by Andrej Karpathy's `llm-wiki` prototype and existing community 
 
 - agent-agnostic first: Codex, Claude Code, OpenCode, Cursor, or any filesystem-capable agent can use it
 - Obsidian-friendly markdown by default
-- zero-dependency CLI for repeatable initialization, indexing, search, and health checks
+- zero-dependency Python CLI for repeatable initialization, indexing, search, and health checks
 - explicit distinction between raw evidence and the LLM-owned compiled wiki layer
 
 ## Core Idea
@@ -57,12 +57,12 @@ wiki/ summaries, entities, concepts, comparisons, overview, synthesis
 Use directly from this checkout:
 
 ```bash
-node ./bin/cwiki.mjs init ./my-wiki --domain "AI research notes"
+python3 ./bin/cwiki.py init ./my-wiki --domain "AI research notes"
 cd my-wiki
-node ../bin/cwiki.mjs lint .
+python3 ../bin/cwiki.py lint .
 ```
 
-Or install the CLI globally from a fork:
+If you still want an npm-style command, install from this checkout; the npm entrypoint simply delegates to Python:
 
 ```bash
 npm install -g .
@@ -70,6 +70,8 @@ cwiki init ./my-wiki --domain "Market research"
 cwiki search ./my-wiki "pricing"
 cwiki lint ./my-wiki
 ```
+
+The repository keeps a small `bin/cwiki.mjs` Node wrapper for npm compatibility. The actual implementation lives in `bin/cwiki.py`.
 
 ## CLI Commands
 
