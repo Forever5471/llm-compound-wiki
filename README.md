@@ -114,6 +114,7 @@ python3 ../bin/cwiki.py index .
 python3 ../bin/cwiki.py lint .
 python3 ../bin/cwiki.py search . "retrieval"
 python3 ../bin/cwiki.py ask . "What does this wiki know about retrieval?"
+OPENAI_API_KEY=... python3 ../bin/cwiki.py answer . "What does this wiki know about retrieval?"
 ```
 
 ## Optional npm Wrapper
@@ -142,12 +143,15 @@ cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
+cwiki answer <dir> <question> [--provider openai] [--model gpt-5.2] [--top-k 6]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
 `ask` does not call an LLM. It searches the compiled wiki, writes a query prompt under `.cwiki/prompts/`, and optionally prints the context pack with `--show-context`. Hand that prompt to Codex, Claude Code, or another agent to synthesize the answer from wiki pages.
+
+`answer` calls a model and writes the draft answer under `.cwiki/answers/`. The first provider is OpenAI's Responses API and requires `OPENAI_API_KEY`. It still creates the same query prompt first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 
 ## Page Format
 

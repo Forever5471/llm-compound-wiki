@@ -181,6 +181,41 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("[[retrieval]]", text)
             self.assertIn("Answer using local citations", text)
 
+    def test_answer_without_api_key_creates_prompt_and_fails_clearly(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Answer test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki(
+                "answer",
+                str(root),
+                "What does the wiki know about retrieval?",
+                "--api-key-env",
+                "CWIKI_TEST_MISSING_OPENAI_KEY",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Created query prompt:", result.stdout)
+            self.assertIn("Missing API key", result.stderr)
+            prompt = root / ".cwiki" / "prompts" / f"query-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
+            self.assertTrue(prompt.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

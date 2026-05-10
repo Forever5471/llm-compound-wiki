@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from urllib import error as urlerror
+from urllib import request
 from urllib.parse import urlparse
 
 
@@ -447,7 +450,7 @@ def compact_page_context(page: Page, max_chars: int = 3500) -> str:
     return text[:max_chars].rstrip() + "\n\n... [truncated for prompt context]"
 
 
-def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False) -> None:
+def create_query_prompt(target: str, question: str, top_k: int = DEFAULT_TOP_K) -> tuple[Path, list[tuple[Page, int]], str]:
     root = Path(target).resolve()
     assert_wiki(root)
     pages = collect_pages(root)
@@ -510,7 +513,12 @@ status: pending
 {context_sections}
 """
     prompt_file.write_text(prompt, encoding="utf-8")
+    return prompt_file, hits, prompt
 
+
+def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False) -> None:
+    root = Path(target).resolve()
+    prompt_file, hits, prompt = create_query_prompt(target, question, top_k)
     print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
     if hits:
         print("Relevant pages:")
@@ -521,6 +529,142 @@ status: pending
     if show_context:
         print("\n--- Query Prompt ---")
         print(prompt)
+
+
+def answer_wiki(
+    target: str,
+    question: str,
+    top_k: int,
+    provider: str,
+    model: str,
+    api_key_env: str,
+    max_output_tokens: int,
+) -> int:
+    if provider != "openai":
+        raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai")
+
+    root = Path(target).resolve()
+    prompt_file, hits, prompt = create_query_prompt(target, question, top_k)
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
+        raise RuntimeError(f"Missing API key. Set {api_key_env}=... or use `cwiki ask` for context-only mode.")
+
+    instructions = (
+        "You answer questions against a local LLM Compound Wiki. "
+        "Use only the provided wiki context. Cite local pages as [[slug]] and cite source paths or URLs from claim ledgers. "
+        "If the context is insufficient, say exactly what is missing. "
+        "Do not invent facts outside the context pack."
+    )
+    answer = call_openai_responses(api_key, model, instructions, prompt, max_output_tokens)
+    answer_file = write_answer_file(root, question, answer, prompt_file, hits, provider, model)
+
+    print(answer)
+    print(f"\nSaved answer: {answer_file.relative_to(root).as_posix()}")
+    print(f"Query prompt: {prompt_file.relative_to(root).as_posix()}")
+    return 0
+
+
+def call_openai_responses(api_key: str, model: str, instructions: str, prompt: str, max_output_tokens: int) -> str:
+    payload = {
+        "model": model,
+        "instructions": instructions,
+        "input": prompt,
+        "max_output_tokens": max_output_tokens,
+    }
+    req = request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI API error ({error.code}): {body}") from error
+    except urlerror.URLError as error:
+        raise RuntimeError(f"OpenAI API request failed: {error}") from error
+
+    text = extract_response_text(data)
+    if not text:
+        raise RuntimeError("OpenAI API returned no text output.")
+    return text
+
+
+def extract_response_text(data: dict[str, object]) -> str:
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    chunks: list[str] = []
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in {"output_text", "text"} and isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def write_answer_file(
+    root: Path,
+    question: str,
+    answer: str,
+    prompt_file: Path,
+    hits: list[tuple[Page, int]],
+    provider: str,
+    model: str,
+) -> Path:
+    date = today()
+    slug = slugify(question)
+    answers_dir = root / ".cwiki" / "answers"
+    ensure_dir(answers_dir)
+    answer_file = answers_dir / f"answer-{date}-{slug}.md"
+    relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits) or "- No direct matches"
+    answer_file.write_text(
+        f"""---
+title: Answer - {question}
+tags: [answer]
+sources: {len(hits)}
+updated: {date}
+status: draft
+provider: {provider}
+model: {model}
+---
+
+# Answer - {question}
+
+## Question
+
+{question}
+
+## Answer
+
+{answer}
+
+## Relevant Pages
+
+{relevant_pages}
+
+## Query Prompt
+
+`{prompt_file.relative_to(root).as_posix()}`
+""",
+        encoding="utf-8",
+    )
+    return answer_file
 
 
 def infer_title(source: str) -> str:
@@ -617,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki init ./my-wiki --domain "AI research notes"
   cwiki capture . https://example.com/article --title "Example Article"
   cwiki ask . "What does this wiki know about retrieval?"
+  cwiki answer . "What does this wiki know about retrieval?" --model gpt-5.2
   cwiki search . "retrieval"
   cwiki lint .
 """,
@@ -642,6 +787,15 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("question", nargs="+")
     ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     ask_parser.add_argument("--show-context", action="store_true")
+
+    answer_parser = subparsers.add_parser("answer", help="Answer a question using a model and wiki context")
+    answer_parser.add_argument("dir")
+    answer_parser.add_argument("question", nargs="+")
+    answer_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    answer_parser.add_argument("--provider", default="openai")
+    answer_parser.add_argument("--model", default=os.environ.get("CWIKI_OPENAI_MODEL", "gpt-5.2"))
+    answer_parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    answer_parser.add_argument("--max-output-tokens", type=int, default=1200)
 
     capture_parser = subparsers.add_parser("capture", help="Capture a source and create an ingest prompt")
     capture_parser.add_argument("dir")
@@ -669,6 +823,16 @@ def main(argv: list[str] | None = None) -> int:
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":
             ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context)
+        elif args.command == "answer":
+            return answer_wiki(
+                args.dir,
+                " ".join(args.question),
+                args.top_k,
+                args.provider,
+                args.model,
+                args.api_key_env,
+                args.max_output_tokens,
+            )
         elif args.command == "capture":
             capture_source(args.dir, args.source, args.title)
         else:
