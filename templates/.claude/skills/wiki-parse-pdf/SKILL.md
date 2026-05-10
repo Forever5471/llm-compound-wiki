@@ -19,6 +19,8 @@ For born-digital PDFs, the CLI uses the local `pdftotext` command when available
 
 For scanned PDFs or image-heavy pages, use the built-in `wiki-parse-image` workflow page by page: inspect images with available vision/OCR capability, write extracted text and visual notes, then capture that text.
 
+This project does not automatically search GitHub or integrate external parser projects. If built-in PDF extraction or OCR is not good enough, tell the user to convert the PDF to Markdown or UTF-8 text with a tool of their choice, then capture that converted file.
+
 ## Workflow
 
 1. Determine PDF type: born-digital, scanned, mixed, or layout-heavy.

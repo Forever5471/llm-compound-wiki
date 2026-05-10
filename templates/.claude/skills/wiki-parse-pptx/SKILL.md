@@ -19,6 +19,8 @@ The CLI reads the `.pptx` OOXML package directly, extracts slide text in slide o
 
 For image-heavy slides, screenshots, diagrams, charts, and SmartArt where meaning is not present as extractable text, route those visuals through `wiki-parse-image`.
 
+This project does not automatically search GitHub or integrate external parser projects. If built-in slide extraction is not good enough, tell the user to convert the deck to Markdown or UTF-8 text with a tool of their choice, then capture that converted file.
+
 ## Workflow
 
 1. Preserve slide order and slide numbers.

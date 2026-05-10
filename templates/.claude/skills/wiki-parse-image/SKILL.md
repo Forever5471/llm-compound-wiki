@@ -13,6 +13,8 @@ Use built-in agent vision/OCR capability first when available in the current env
 
 For `cwiki capture . <image-file>`, the CLI records an image raw reference and points the ingesting agent back to this skill. The skill is responsible for turning the image into auditable OCR text and visual notes before claims enter the wiki.
 
+This project does not automatically search GitHub or integrate external OCR projects. If built-in image recognition is not good enough, tell the user to convert the image content to Markdown or UTF-8 text with a tool of their choice, then capture that converted file.
+
 ## Workflow
 
 1. Identify image type: text scan, UI screenshot, chart, diagram, photo, or mixed.

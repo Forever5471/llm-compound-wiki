@@ -17,7 +17,7 @@ cwiki capture . <file.docx> --title "<title>"
 
 The CLI reads the `.docx` OOXML package directly and extracts body text, including paragraphs inside tables. It does not require external GitHub projects.
 
-If the document has important embedded images, comments, tracked changes, or complex layout, explicitly mark those as extraction limits and route embedded images through `wiki-parse-image`.
+This project does not automatically search GitHub or integrate external parser projects. If the built-in extraction misses important embedded images, comments, tracked changes, or complex layout, tell the user to convert the original file to Markdown or UTF-8 text with a tool of their choice, then capture that converted file.
 
 ## Workflow
 

@@ -88,7 +88,7 @@ python3 ../bin/cwiki.py capture . ./metrics.xlsx --title "Metrics"
 
 `capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`. It has built-in support for URL records, UTF-8 text/Markdown, OOXML text extraction for `.docx`, `.pptx`, and `.xlsx`, and image file references. For `.pdf`, it uses the local `pdftotext` command when available; otherwise it asks you to convert the PDF to UTF-8 text or route scanned pages through the image/OCR workflow.
 
-For complex formats, use the project's built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`. These skills do not require agents to clone or call external GitHub projects; they use this CLI's built-in parsers and the current environment's available vision/OCR capability.
+For complex formats, use the project's built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`. This project does not automatically search GitHub or integrate external parser projects. If the built-in extraction is not good enough, convert the original file to Markdown or UTF-8 text with a tool of your choice, then use this project for capture, ingest, ask, and answer.
 
 Ingest preserves the source language by default: Chinese sources should produce Chinese wiki pages, English sources should produce English wiki pages. Translation only happens when the user explicitly asks for it.
 

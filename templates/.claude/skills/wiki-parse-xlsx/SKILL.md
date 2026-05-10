@@ -17,6 +17,8 @@ cwiki capture . <file.xlsx> --title "<title>"
 
 The CLI reads the `.xlsx` OOXML package directly, extracts shared strings and worksheet cell values, and emits `Sheet N` sections. It does not require external GitHub projects.
 
+This project does not automatically search GitHub or integrate external parser projects. If built-in spreadsheet extraction is not good enough for formulas, pivots, charts, hidden sheets, or formatting-heavy meaning, tell the user to convert the workbook to Markdown, CSV, or UTF-8 text with a tool of their choice, then capture that converted file.
+
 ## Workflow
 
 1. Preserve workbook and sheet order.
@@ -31,4 +33,3 @@ The CLI reads the `.xlsx` OOXML package directly, extracts shared strings and wo
 - Flag formulas, charts, pivot tables, hidden rows/sheets, merged-cell meaning, and formatting-only semantics as possible extraction gaps.
 - For business metrics, preserve units, periods, and source sheet references.
 - Do not infer unstated calculations unless the source file makes them explicit.
-

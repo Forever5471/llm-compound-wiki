@@ -83,7 +83,7 @@ python3 ../bin/cwiki.py capture . ./指标表.xlsx --title "指标表"
 
 `capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。当前内置支持 URL 记录、UTF-8 文本/Markdown、`.docx`、`.pptx`、`.xlsx` 的 OOXML 文本抽取，以及图片文件引用记录；`.pdf` 会优先调用本机 `pdftotext`，如果环境没有该命令，会明确提示先转换为 UTF-8 文本或走图片/OCR流程。
 
-复杂格式走项目内置解析 skill：`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-parse-xlsx`。这些技能不要求 agent 去 GitHub 找外部项目，而是优先使用本项目 CLI 的内置解析能力和当前环境可用的视觉/OCR能力。
+复杂格式走项目内置解析 skill：`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-parse-xlsx`。本项目不会自动去外部 GitHub 寻找或集成解析项目；如果内置解析效果不够好，建议用户先自行使用其他工具把原文件转换成 Markdown 或 UTF-8 文本，再用本项目继续 capture、ingest、ask、answer。
 
 摄入时默认保留原文件语言：中文资料会生成中文 wiki 页面，英文资料会生成英文 wiki 页面。只有在用户明确要求时才翻译。
 
