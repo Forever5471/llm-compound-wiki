@@ -424,7 +424,7 @@ def search_wiki(target: str, query: str) -> None:
 
 
 def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int]]:
-    terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term and term not in STOPWORDS]
+    terms = query_terms(query)
     if not terms:
         terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term]
     if not terms:
@@ -441,6 +441,29 @@ def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int
             hits.append((page, score))
     hits.sort(key=lambda hit: (-hit[1], hit[0].slug))
     return hits[:limit]
+
+
+def query_terms(query: str) -> list[str]:
+    normalized = query.lower().strip()
+    raw_terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fa5]{2,}", normalized)
+    terms: list[str] = []
+    for term in raw_terms:
+        if term in STOPWORDS:
+            continue
+        if re.fullmatch(r"[\u4e00-\u9fa5]{3,}", term):
+            grams = [term[i : i + 2] for i in range(len(term) - 1)]
+            terms.extend(gram for gram in grams if gram not in STOPWORDS)
+        else:
+            terms.append(term)
+
+    # Preserve order while deduplicating.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            deduped.append(term)
+    return deduped
 
 
 def compact_page_context(page: Page, max_chars: int = 3500) -> str:

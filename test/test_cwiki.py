@@ -181,6 +181,30 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("[[retrieval]]", text)
             self.assertIn("Answer using local citations", text)
 
+    def test_ask_matches_mixed_chinese_english_query(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Chinese query test")
+            (root / "wiki" / "concepts" / "rpa-self-healing.md").write_text(
+                """---
+title: RPA 自愈
+kind: concept
+tags: [rpa, self-healing]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# RPA 自愈
+
+RPA 自愈通过候选召回、语义匹配、风险分级和结果校验恢复流程。
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("ask", str(root), "如何实现rpa自愈？")
+            self.assertIn("[[rpa-self-healing]]", result.stdout)
+
     def test_answer_without_api_key_creates_prompt_and_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
