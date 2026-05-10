@@ -79,6 +79,10 @@ def today() -> str:
     return dt.date.today().isoformat()
 
 
+def timestamp() -> str:
+    return dt.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+
+
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -93,7 +97,7 @@ def load_dotenv(path: Path) -> None:
         key, value = stripped.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key:
             os.environ[key] = value
 
 
@@ -215,7 +219,16 @@ def init_wiki(target: str, domain: str | None) -> None:
         write_if_missing(root / "wiki" / section / ".gitkeep", "")
     write_if_missing(
         root / ".gitignore",
-        "raw/**\n!raw/.gitkeep\n.cwiki/prompts/**\n!.cwiki/prompts/.gitkeep\n.env\n.DS_Store\n",
+        (
+            "raw/**\n"
+            "!raw/.gitkeep\n"
+            ".cwiki/prompts/**\n"
+            "!.cwiki/prompts/.gitkeep\n"
+            ".cwiki/briefs/**\n"
+            ".cwiki/answers/**\n"
+            ".env\n"
+            ".DS_Store\n"
+        ),
     )
 
     replacements = {"{{domain}}": wiki_domain, "{{date}}": date}
@@ -567,7 +580,21 @@ status: pending
 
 def render_human_brief(question: str, hits: list[tuple[Page, int]]) -> str:
     date = today()
+    chinese = contains_chinese(question) or any(contains_chinese(page.text) for page, _ in hits)
     if not hits:
+        if chinese:
+            return f"""---
+title: Brief - {question}
+tags: [query, brief]
+sources: 0
+updated: {date}
+status: draft
+---
+
+# Brief - {question}
+
+没有找到直接匹配的 wiki 页面。请先运行 `cwiki index .`、检查 `wiki/index.md`，或继续摄入更多来源后再期待有依据的回答。
+"""
         return f"""---
 title: Brief - {question}
 tags: [query, brief]
@@ -584,7 +611,53 @@ No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/i
     relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}` — {page.summary}" for page, score in hits)
     claims = "\n".join(extract_claim_bullets(page) for page, _ in hits)
     syntheses = "\n".join(extract_section_bullet(page, "Synthesis") for page, _ in hits)
+    if not syntheses:
+        syntheses = "\n".join(extract_section_bullet(page, "综合结论") for page, _ in hits)
     open_questions = "\n".join(extract_section_bullet(page, "Open Questions") for page, _ in hits)
+    if not open_questions:
+        open_questions = "\n".join(extract_section_bullet(page, "开放问题") for page, _ in hits)
+
+    if chinese:
+        return f"""---
+title: Brief - {question}
+tags: [query, brief]
+sources: {len(hits)}
+updated: {date}
+status: draft
+---
+
+# Brief - {question}
+
+这是从已编译 wiki 中确定性生成的证据摘要，比模型 prompt 更适合快速阅读，但还不是完整的大模型回答。
+
+## 问题
+
+{question}
+
+## 简短结论
+
+wiki 中有 {len(hits)} 个相关页面。建议先读 {', '.join(f'[[{page.slug}]]' for page, _ in hits[:3])}。
+
+## 相关页面
+
+{relevant_pages}
+
+## 关键声明
+
+{claims or '- 匹配页面中没有找到 Claim Ledger 行。'}
+
+## 既有综合
+
+{syntheses or '- 匹配页面中没有找到综合结论章节。'}
+
+## 开放问题与缺口
+
+{open_questions or '- 匹配页面中没有显式开放问题。'}
+
+## 下一步
+
+如需完整答案，运行 `cwiki answer` 并配置 API key，或把 `.cwiki/prompts/query-*.md` 交给 agent。
+"""
 
     return f"""---
 title: Brief - {question}
@@ -626,6 +699,10 @@ The wiki has relevant material in {len(hits)} page(s). Start with {', '.join(f'[
 
 For a polished answer, run `cwiki answer` with an API key or give `.cwiki/prompts/query-*.md` to an agent.
 """
+
+
+def contains_chinese(text: str) -> bool:
+    return re.search(r"[\u4e00-\u9fa5]", text) is not None
 
 
 def extract_claim_bullets(page: Page, max_claims: int = 4) -> str:
@@ -885,7 +962,7 @@ def write_answer_file(
     slug = slugify(question)
     answers_dir = root / ".cwiki" / "answers"
     ensure_dir(answers_dir)
-    answer_file = answers_dir / f"answer-{date}-{slug}.md"
+    answer_file = answers_dir / f"answer-{timestamp()}-{slug}.md"
     relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits) or "- No direct matches"
     answer_file.write_text(
         f"""---

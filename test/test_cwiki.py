@@ -36,7 +36,10 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / "wiki" / "entities").exists())
             self.assertTrue((root / "wiki" / "concepts").exists())
             self.assertTrue((root / "wiki" / "comparisons").exists())
-            self.assertIn(".env", (root / ".gitignore").read_text())
+            gitignore = (root / ".gitignore").read_text()
+            self.assertIn(".env", gitignore)
+            self.assertIn(".cwiki/briefs/**", gitignore)
+            self.assertIn(".cwiki/answers/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
 
@@ -199,6 +202,39 @@ Retrieval finds relevant evidence before synthesis.
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Created query prompt:", result.stdout)
             self.assertIn("Missing API key", result.stderr)
+
+    def test_chinese_ask_creates_chinese_human_brief(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "中文 brief 测试")
+            (root / "wiki" / "concepts" / "gray-zone-arbitration.md").write_text(
+                """---
+title: 灰区仲裁设计
+kind: concept
+tags: [rpa, gray_zone]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# 灰区仲裁设计
+
+gray_zone 是自愈链路里的模糊样本处理层。
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| gray_zone 在 Top-K 不够确定时触发。 | raw/source.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            run_cwiki("ask", str(root), "gray_zone是怎么设计的")
+            brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-gray-zone是怎么设计的.md"
+            text = brief.read_text()
+            self.assertIn("## 问题", text)
+            self.assertIn("## 简短结论", text)
+            self.assertIn("## 关键声明", text)
 
     def test_ask_matches_mixed_chinese_english_query(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
