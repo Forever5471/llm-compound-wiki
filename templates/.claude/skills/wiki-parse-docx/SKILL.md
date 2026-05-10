@@ -7,15 +7,21 @@ description: Use when capturing or preparing Microsoft Word .docx files for wiki
 
 Goal: convert a `.docx` source into clean Markdown or UTF-8 text that can be captured under `raw/captures/` and then compiled into `wiki/`.
 
-## Preferred Tool Order
+## Built-In Parser
 
-1. If available, use a document parser that preserves structure, such as Docling, MarkItDown, Unstructured, or MinerU.
-2. If no parser is installed, use `cwiki capture . <file.docx>`; the CLI has a built-in OOXML body-text extractor.
-3. If the document has important tables, screenshots, comments, or tracked changes, tell the user extraction may be partial and recommend a richer parser before ingest.
+Use the repository's built-in parser first:
+
+```bash
+cwiki capture . <file.docx> --title "<title>"
+```
+
+The CLI reads the `.docx` OOXML package directly and extracts body text, including paragraphs inside tables. It does not require external GitHub projects.
+
+If the document has important embedded images, comments, tracked changes, or complex layout, explicitly mark those as extraction limits and route embedded images through `wiki-parse-image`.
 
 ## Workflow
 
-1. Extract to Markdown or UTF-8 text.
+1. Run `cwiki capture` on the `.docx`.
 2. Preserve source language; do not translate.
 3. Keep document headings and table boundaries visible when possible.
 4. Capture the extracted result with `cwiki capture`.
@@ -26,4 +32,3 @@ Goal: convert a `.docx` source into clean Markdown or UTF-8 text that can be cap
 - Confirm title, section headings, and key tables survived extraction.
 - Flag embedded images that need `wiki-parse-image`.
 - Cite the raw captured file path in all claim ledger rows.
-

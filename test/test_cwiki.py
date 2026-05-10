@@ -47,6 +47,7 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-pdf" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-image" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-pptx" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-parse-xlsx" / "SKILL.md").exists())
 
             self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text())
             claude = (root / "CLAUDE.md").read_text()
@@ -176,6 +177,69 @@ Inline code `[[not-a-real-link]]` should not count.
             raw = raw_file.read_text()
             self.assertIn("type: docx", raw)
             self.assertIn("中文 DOCX 摄入测试", raw)
+
+    def test_capture_extracts_pptx_text(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "PPTX capture test")
+            pptx = root / "source.pptx"
+            slide_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>OpenClaw 介绍</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>
+"""
+            with zipfile.ZipFile(pptx, "w") as archive:
+                archive.writestr("ppt/slides/slide1.xml", slide_xml)
+
+            run_cwiki("capture", str(root), str(pptx), "--title", "PPTX 测试")
+            raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-pptx-测试.md"
+            raw = raw_file.read_text()
+            self.assertIn("type: pptx", raw)
+            self.assertIn("## Slide 1", raw)
+            self.assertIn("OpenClaw 介绍", raw)
+
+    def test_capture_extracts_xlsx_text(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "XLSX capture test")
+            xlsx = root / "source.xlsx"
+            shared_strings = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>指标</t></si>
+  <si><t>自愈成功率</t></si>
+</sst>
+"""
+            sheet = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>2026</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><v>0.8</v></c></row>
+  </sheetData>
+</worksheet>
+"""
+            with zipfile.ZipFile(xlsx, "w") as archive:
+                archive.writestr("xl/sharedStrings.xml", shared_strings)
+                archive.writestr("xl/worksheets/sheet1.xml", sheet)
+
+            run_cwiki("capture", str(root), str(xlsx), "--title", "XLSX 测试")
+            raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-xlsx-测试.md"
+            raw = raw_file.read_text()
+            self.assertIn("type: xlsx", raw)
+            self.assertIn("## Sheet 1", raw)
+            self.assertIn("自愈成功率 | 0.8", raw)
+
+    def test_capture_records_image_reference(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Image capture test")
+            image = root / "source.png"
+            image.write_bytes(b"not-a-real-image-but-a-reference")
+
+            run_cwiki("capture", str(root), str(image), "--title", "图片测试")
+            raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-图片测试.md"
+            raw = raw_file.read_text()
+            self.assertIn("type: image", raw)
+            self.assertIn("wiki-parse-image", raw)
 
     def test_ask_creates_query_prompt_from_wiki_context(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:

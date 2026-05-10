@@ -82,11 +82,13 @@ Put source files under `my-wiki/raw/`, or capture a URL/file:
 python3 ../bin/cwiki.py capture . https://example.com/article --title "Example Article"
 python3 ../bin/cwiki.py capture . ./notes.md --title "Project Notes"
 python3 ../bin/cwiki.py capture . ./product-plan.docx --title "Product Plan"
+python3 ../bin/cwiki.py capture . ./intro-deck.pptx --title "Intro Deck"
+python3 ../bin/cwiki.py capture . ./metrics.xlsx --title "Metrics"
 ```
 
-`capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`. It currently supports URL records, UTF-8 text/Markdown, and `.docx` body extraction. For `.pdf`, it uses the local `pdftotext` command when available; otherwise it asks you to convert the PDF to UTF-8 text first.
+`capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`. It has built-in support for URL records, UTF-8 text/Markdown, OOXML text extraction for `.docx`, `.pptx`, and `.xlsx`, and image file references. For `.pdf`, it uses the local `pdftotext` command when available; otherwise it asks you to convert the PDF to UTF-8 text or route scanned pages through the image/OCR workflow.
 
-For complex formats, use the dedicated skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, and `wiki-parse-pptx`. These skills prefer reusing open-source parsers such as Docling, MarkItDown, MinerU, or Unstructured when available; otherwise they fall back to lightweight CLI parsing or explicit conversion guidance.
+For complex formats, use the project's built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`. These skills do not require agents to clone or call external GitHub projects; they use this CLI's built-in parsers and the current environment's available vision/OCR capability.
 
 Ingest preserves the source language by default: Chinese sources should produce Chinese wiki pages, English sources should produce English wiki pages. Translation only happens when the user explicitly asks for it.
 
@@ -223,7 +225,7 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 
 `CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
 
-The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
+The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-parse-xlsx`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
 
 ## Design Principles
 

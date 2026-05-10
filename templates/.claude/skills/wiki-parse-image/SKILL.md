@@ -7,18 +7,18 @@ description: Use when capturing or preparing images for wiki ingest, including s
 
 Goal: turn an image into auditable text, visual descriptions, and extraction notes for wiki ingest.
 
-## Preferred Tool Order
+## Built-In Parser
 
-1. For OCR text, use local OCR such as Tesseract/EasyOCR/PaddleOCR when available.
-2. For charts, UI screenshots, diagrams, or dense visual context, use a vision-language model if allowed by the user.
-3. For document images inside PDFs/DOCX/PPTX, extract the image reference and parse it separately rather than silently dropping it.
+Use built-in agent vision/OCR capability first when available in the current environment. Do not require cloning or calling external GitHub projects.
+
+For `cwiki capture . <image-file>`, the CLI records an image raw reference and points the ingesting agent back to this skill. The skill is responsible for turning the image into auditable OCR text and visual notes before claims enter the wiki.
 
 ## Workflow
 
 1. Identify image type: text scan, UI screenshot, chart, diagram, photo, or mixed.
-2. Extract visible text with OCR.
+2. Extract visible text using built-in OCR or vision.
 3. Add a concise visual description for non-text meaning.
-4. Capture the OCR/description as a text source with `cwiki capture`.
+4. Capture the OCR/description as a text source with `cwiki capture`, or keep the image raw reference and include OCR/description in the ingest output.
 5. During ingest, separate observed facts from interpretation.
 
 ## Quality Checks
@@ -26,4 +26,3 @@ Goal: turn an image into auditable text, visual descriptions, and extraction not
 - Include OCR confidence or uncertainty when available.
 - Preserve original language.
 - Flag tables, charts, and diagrams that require manual verification.
-

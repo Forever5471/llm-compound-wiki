@@ -20,7 +20,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - `.agents/skills/` contains compatibility entrypoints for other agents.
 - If both exist, prefer `.claude/skills/<skill>/SKILL.md` as the source of truth.
 - Use `wiki-capture` before `wiki-ingest` when a source file or URL still needs to be recorded under `raw/captures/`.
-- For complex source formats, use the dedicated parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, and `wiki-parse-pptx`.
+- For complex source formats, use the built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`.
 
 ## Operating Principles
 

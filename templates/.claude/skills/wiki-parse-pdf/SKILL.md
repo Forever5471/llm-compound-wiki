@@ -7,17 +7,23 @@ description: Use when capturing or preparing PDF files for wiki ingest, includin
 
 Goal: convert a PDF into readable Markdown or UTF-8 text while preserving enough structure for reliable wiki compilation.
 
-## Preferred Tool Order
+## Built-In Parser
 
-1. For complex PDFs, prefer open-source document parsers such as Docling, MinerU, Unstructured, Marker, or MarkItDown.
-2. For simple born-digital PDFs, `cwiki capture` can use local `pdftotext` when installed.
-3. For scanned PDFs or image-heavy pages, use OCR first, then capture the OCR output.
+Use the repository's built-in path first:
+
+```bash
+cwiki capture . <file.pdf> --title "<title>"
+```
+
+For born-digital PDFs, the CLI uses the local `pdftotext` command when available. This does not call GitHub projects or remote parsers.
+
+For scanned PDFs or image-heavy pages, use the built-in `wiki-parse-image` workflow page by page: inspect images with available vision/OCR capability, write extracted text and visual notes, then capture that text.
 
 ## Workflow
 
 1. Determine PDF type: born-digital, scanned, mixed, or layout-heavy.
-2. Extract text with structure-aware tooling when available.
-3. For scanned pages, run OCR and keep page numbers or image references.
+2. Extract text with `cwiki capture` when the PDF has selectable text.
+3. For scanned pages, use `wiki-parse-image` and keep page numbers or image references.
 4. Capture the extracted Markdown/text with `cwiki capture`.
 5. Process the generated ingest prompt with `wiki-ingest`.
 
@@ -26,4 +32,3 @@ Goal: convert a PDF into readable Markdown or UTF-8 text while preserving enough
 - Verify page count and section coverage.
 - Check tables, captions, footnotes, formulas, and multi-column reading order.
 - Mark extraction uncertainty in the ingest summary if OCR or layout recovery was imperfect.
-

@@ -1105,8 +1105,14 @@ def read_source_text(path: Path) -> tuple[str, str]:
         return path.read_text(encoding="utf-8"), "text"
     if suffix == ".docx":
         return extract_docx_text(path), "docx"
+    if suffix == ".pptx":
+        return extract_pptx_text(path), "pptx"
+    if suffix == ".xlsx":
+        return extract_xlsx_text(path), "xlsx"
     if suffix == ".pdf":
         return extract_pdf_text(path), "pdf"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+        return image_reference_text(path), "image"
     try:
         return path.read_text(encoding="utf-8"), "text"
     except UnicodeDecodeError as error:
@@ -1144,6 +1150,111 @@ def extract_docx_text(path: Path) -> str:
     if not extracted:
         raise RuntimeError(f"No text could be extracted from .docx file: {path}")
     return extracted
+
+
+def sorted_ooxml_parts(names: list[str], prefix: str, suffix: str) -> list[str]:
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+){re.escape(suffix)}$")
+    matched = []
+    for name in names:
+        match = pattern.match(name)
+        if match:
+            matched.append((int(match.group(1)), name))
+    return [name for _, name in sorted(matched)]
+
+
+def extract_xml_text(xml: bytes) -> str:
+    root = ElementTree.fromstring(xml)
+    chunks: list[str] = []
+    for node in root.iter():
+        if node.tag.endswith("}t") and node.text:
+            chunks.append(node.text)
+    return " ".join(chunks).strip()
+
+
+def extract_pptx_text(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            slide_parts = sorted_ooxml_parts(names, "ppt/slides/slide", ".xml")
+            if not slide_parts:
+                raise RuntimeError(f"No slides found in .pptx file: {path}")
+            sections: list[str] = []
+            for index, part in enumerate(slide_parts, start=1):
+                text = extract_xml_text(archive.read(part))
+                if text:
+                    sections.append(f"## Slide {index}\n\n{text}")
+                else:
+                    sections.append(f"## Slide {index}\n\n[No extractable text]")
+    except zipfile.BadZipFile as error:
+        raise RuntimeError(f"Invalid .pptx file: {path}") from error
+    extracted = "\n\n".join(sections).strip()
+    if not extracted:
+        raise RuntimeError(f"No text could be extracted from .pptx file: {path}")
+    return extracted
+
+
+def extract_xlsx_text(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            shared_strings = read_xlsx_shared_strings(archive)
+            sheet_parts = sorted_ooxml_parts(names, "xl/worksheets/sheet", ".xml")
+            if not sheet_parts:
+                raise RuntimeError(f"No worksheets found in .xlsx file: {path}")
+            sections = [extract_xlsx_sheet(archive.read(part), shared_strings, index) for index, part in enumerate(sheet_parts, start=1)]
+    except zipfile.BadZipFile as error:
+        raise RuntimeError(f"Invalid .xlsx file: {path}") from error
+    extracted = "\n\n".join(section for section in sections if section.strip()).strip()
+    if not extracted:
+        raise RuntimeError(f"No text could be extracted from .xlsx file: {path}")
+    return extracted
+
+
+def read_xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in archive.namelist():
+        return []
+    root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+    strings: list[str] = []
+    for item in root:
+        parts = [node.text or "" for node in item.iter() if node.tag.endswith("}t")]
+        strings.append("".join(parts))
+    return strings
+
+
+def extract_xlsx_sheet(xml: bytes, shared_strings: list[str], index: int) -> str:
+    root = ElementTree.fromstring(xml)
+    rows: list[str] = []
+    for row in root.iter():
+        if not row.tag.endswith("}row"):
+            continue
+        cells: list[str] = []
+        for cell in row:
+            if not cell.tag.endswith("}c"):
+                continue
+            cell_type = cell.attrib.get("t")
+            value_node = next((child for child in cell if child.tag.endswith("}v")), None)
+            inline_text = " ".join(node.text or "" for node in cell.iter() if node.tag.endswith("}t")).strip()
+            value = ""
+            if inline_text:
+                value = inline_text
+            elif value_node is not None and value_node.text is not None:
+                raw = value_node.text
+                if cell_type == "s" and raw.isdigit() and int(raw) < len(shared_strings):
+                    value = shared_strings[int(raw)]
+                else:
+                    value = raw
+            cells.append(value)
+        if any(cells):
+            rows.append(" | ".join(cells))
+    body = "\n".join(rows).strip() or "[No extractable cell text]"
+    return f"## Sheet {index}\n\n{body}"
+
+
+def image_reference_text(path: Path) -> str:
+    return f"""Image source: {path}
+
+This raw record references an image file. Use the built-in `wiki-parse-image` skill to inspect the image, extract visible text, describe diagrams/charts/UI, and record uncertainty before compiling claims into `wiki/`.
+"""
 
 
 def extract_pdf_text(path: Path) -> str:

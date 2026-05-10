@@ -66,7 +66,7 @@ wiki/             LLM-owned compiled knowledge layer
 
 Trigger when the user says: ingest, process, add to wiki, summarize this source, read this URL/file, or points to a raw source.
 
-If the source has not been captured yet, use `wiki-capture` first. For complex formats, route through the dedicated parser skills before ingest: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, or `wiki-parse-pptx`.
+If the source has not been captured yet, use `wiki-capture` first. For complex formats, route through the built-in parser skills before ingest: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, or `wiki-parse-xlsx`.
 
 Action:
 
