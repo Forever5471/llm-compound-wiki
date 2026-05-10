@@ -18,6 +18,39 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_ROOT = PROJECT_ROOT / "templates"
 WIKI_SECTIONS = ["summaries", "entities", "concepts", "comparisons"]
 IGNORED_WIKI_FILES = {"index.md", "log.md"}
+DEFAULT_TOP_K = 6
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "about",
+    "does",
+    "do",
+    "is",
+    "are",
+    "the",
+    "this",
+    "that",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "what",
+    "wiki",
+    "know",
+    "knows",
+    "tell",
+    "me",
+    "什么",
+    "这个",
+    "一下",
+    "关于",
+    "知道",
+    "了解",
+    "结论",
+    "如何",
+}
 
 
 @dataclass
@@ -377,15 +410,7 @@ def lint_wiki(target: str) -> int:
 def search_wiki(target: str, query: str) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
-    q = query.lower()
-    hits = []
-    for page in collect_pages(root):
-        haystack = f"{page.title}\n{page.summary}\n{page.text}".lower()
-        count = haystack.count(q)
-        if count > 0:
-            hits.append((page, count))
-    hits.sort(key=lambda hit: (-hit[1], hit[0].page.slug if hasattr(hit[0], "page") else hit[0].slug))
-    hits = hits[:20]
+    hits = find_hits(collect_pages(root), query, limit=20)
 
     if not hits:
         print(f'No matches for "{query}".')
@@ -393,6 +418,109 @@ def search_wiki(target: str, query: str) -> None:
     for page, count in hits:
         print(f"- [[{page.slug}]] ({count}) {page.rel}")
         print(f"  {page.summary}")
+
+
+def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int]]:
+    terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term and term not in STOPWORDS]
+    if not terms:
+        terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term]
+    if not terms:
+        return []
+    hits: list[tuple[Page, int]] = []
+    for page in pages:
+        haystack = f"{page.title}\n{page.summary}\n{page.tags}\n{page.text}".lower()
+        title_slug = f"{page.title} {page.slug}".lower()
+        score = sum(haystack.count(term) for term in terms)
+        score += sum(title_slug.count(term) * 4 for term in terms)
+        if query.lower() in haystack:
+            score += 3
+        if score > 0:
+            hits.append((page, score))
+    hits.sort(key=lambda hit: (-hit[1], hit[0].slug))
+    return hits[:limit]
+
+
+def compact_page_context(page: Page, max_chars: int = 3500) -> str:
+    text = page.text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n\n... [truncated for prompt context]"
+
+
+def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    pages = collect_pages(root)
+    hits = find_hits(pages, question, limit=top_k)
+    date = today()
+    slug = slugify(question)
+    ensure_dir(root / ".cwiki" / "prompts")
+    prompt_file = root / ".cwiki" / "prompts" / f"query-{date}-{slug}.md"
+
+    if hits:
+        context_sections = "\n\n".join(
+            f"""## [[{page.slug}]] — {page.title}
+
+- File: `{page.rel}`
+- Kind: `{page.kind}`
+- Tags: {page.tags or "-"}
+- Updated: {page.updated or "-"}
+- Search score: {score}
+
+```markdown
+{compact_page_context(page)}
+```"""
+            for page, score in hits
+        )
+        relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits)
+    else:
+        context_sections = "No directly matching wiki pages were found. Read `wiki/index.md` and decide whether the wiki has enough information."
+        relevant_pages = "- No direct matches"
+
+    prompt = f"""---
+title: Query Prompt - {question}
+tags: [query, prompt]
+sources: {len(hits)}
+updated: {date}
+status: pending
+---
+
+# Query Prompt - {question}
+
+## Question
+
+{question}
+
+## Relevant Pages
+
+{relevant_pages}
+
+## Instructions For The Agent
+
+1. Read `CLAUDE.md` and `WIKI_SCHEMA.md`.
+2. Read `wiki/index.md`.
+3. Read the relevant pages below in full from disk before answering.
+4. Answer using local citations like `[[slug]]` and source paths or URLs from claim ledgers.
+5. State gaps explicitly if the wiki does not contain enough evidence.
+6. If the answer is valuable, offer to save it into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+7. If saved, run `cwiki index .` and append to `wiki/log.md`.
+
+## Context Pack
+
+{context_sections}
+"""
+    prompt_file.write_text(prompt, encoding="utf-8")
+
+    print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
+    if hits:
+        print("Relevant pages:")
+        for page, score in hits:
+            print(f"- [[{page.slug}]] ({score}) {page.rel}")
+    else:
+        print("Relevant pages: no direct matches")
+    if show_context:
+        print("\n--- Query Prompt ---")
+        print(prompt)
 
 
 def infer_title(source: str) -> str:
@@ -488,6 +616,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""Examples:
   cwiki init ./my-wiki --domain "AI research notes"
   cwiki capture . https://example.com/article --title "Example Article"
+  cwiki ask . "What does this wiki know about retrieval?"
   cwiki search . "retrieval"
   cwiki lint .
 """,
@@ -507,6 +636,12 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser = subparsers.add_parser("search", help="Search wiki pages")
     search_parser.add_argument("dir")
     search_parser.add_argument("query", nargs="+")
+
+    ask_parser = subparsers.add_parser("ask", help="Create a query prompt from wiki context")
+    ask_parser.add_argument("dir")
+    ask_parser.add_argument("question", nargs="+")
+    ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    ask_parser.add_argument("--show-context", action="store_true")
 
     capture_parser = subparsers.add_parser("capture", help="Capture a source and create an ingest prompt")
     capture_parser.add_argument("dir")
@@ -532,6 +667,8 @@ def main(argv: list[str] | None = None) -> int:
             return lint_wiki(args.dir)
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
+        elif args.command == "ask":
+            ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context)
         elif args.command == "capture":
             capture_source(args.dir, args.source, args.title)
         else:

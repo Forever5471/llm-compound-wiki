@@ -145,6 +145,42 @@ Inline code `[[not-a-real-link]]` should not count.
             prompt = root / ".cwiki" / "prompts" / f"ingest-{dt.date.today().isoformat()}-some-article.md"
             self.assertTrue(prompt.exists())
 
+    def test_ask_creates_query_prompt_from_wiki_context(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Ask test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+
+## Related
+
+- [[synthesis]] - global synthesis
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("ask", str(root), "What does the wiki know about retrieval?")
+            self.assertIn("Created query prompt:", result.stdout)
+            self.assertIn("[[retrieval]]", result.stdout)
+
+            prompt = root / ".cwiki" / "prompts" / f"query-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
+            self.assertTrue(prompt.exists())
+            text = prompt.read_text()
+            self.assertIn("## Question", text)
+            self.assertIn("[[retrieval]]", text)
+            self.assertIn("Answer using local citations", text)
+
 
 if __name__ == "__main__":
     unittest.main()

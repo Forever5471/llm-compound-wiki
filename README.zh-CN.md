@@ -108,6 +108,7 @@ wiki/
 python3 ../bin/cwiki.py index .
 python3 ../bin/cwiki.py lint .
 python3 ../bin/cwiki.py search . "retrieval"
+python3 ../bin/cwiki.py ask . "这个 wiki 对 retrieval 有什么结论？"
 ```
 
 ## 可选 npm 包装器
@@ -135,10 +136,13 @@ cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
+cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
+
+`ask` 也不会直接调用大模型。它会搜索已经编译好的 wiki，在 `.cwiki/prompts/` 下生成 query prompt；加 `--show-context` 时会把上下文包打印出来。把这个 prompt 交给 Codex、Claude Code 或其他 agent，即可基于 wiki 页面综合回答。
 
 ## 页面规范
 
