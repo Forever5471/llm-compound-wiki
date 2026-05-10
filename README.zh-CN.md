@@ -29,7 +29,8 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 ```text
 .
 ├── AGENTS.md                 本项目开发规则
-├── bin/cwiki.mjs             零依赖 CLI
+├── bin/cwiki.py              零依赖 Python CLI
+├── bin/cwiki.mjs             Node/npm 兼容包装器
 ├── templates/                初始化 wiki 时复制的模板
 │   ├── AGENTS.md
 │   ├── CLAUDE.md
@@ -51,12 +52,65 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 
 ## 快速开始
 
+### 1. 克隆项目
+
+```bash
+git clone https://github.com/Forever5471/llm-compound-wiki.git
+cd llm-compound-wiki
+```
+
+### 2. 创建一个 wiki
+
 ```bash
 python3 ./bin/cwiki.py init ./my-wiki --domain "AI 研究笔记"
 cd my-wiki
-python3 ../bin/cwiki.py capture . https://example.com/article --title "示例文章"
 python3 ../bin/cwiki.py lint .
 ```
+
+这会创建 `raw/`、`wiki/`、`.cwiki/prompts/`、`CLAUDE.md`、`AGENTS.md`、`WIKI_SCHEMA.md` 和 workflow skills。
+
+### 3. 添加资料
+
+可以直接把资料放到 `my-wiki/raw/`，也可以用 `capture` 捕获 URL 或本地文件：
+
+```bash
+python3 ../bin/cwiki.py capture . https://example.com/article --title "示例文章"
+python3 ../bin/cwiki.py capture . ./notes.md --title "项目笔记"
+```
+
+`capture` 会把原始资料记录到 `raw/captures/`，并在 `.cwiki/prompts/` 下生成 ingest prompt。
+
+### 4. 让智能体摄入
+
+用 Codex、Claude Code、OpenCode、Cursor 或其他能读写文件的 agent 打开生成的 wiki 目录，然后说：
+
+```text
+Read CLAUDE.md and WIKI_SCHEMA.md, then process .cwiki/prompts/ingest-xxx.md.
+```
+
+智能体应该把资料编译进：
+
+```text
+wiki/
+├── overview.md
+├── synthesis.md
+├── summaries/
+├── entities/
+├── concepts/
+├── comparisons/
+├── index.md
+└── log.md
+```
+
+### 5. 维护和搜索
+
+```bash
+python3 ../bin/cwiki.py index .
+python3 ../bin/cwiki.py lint .
+python3 ../bin/cwiki.py search . "retrieval"
+```
+
+## 可选 npm 包装器
 
 如果仍然想要 npm 风格的全局 `cwiki` 命令，也可以安装；npm 入口只是转发到 Python：
 
@@ -68,6 +122,11 @@ cwiki lint ./my-wiki
 ```
 
 仓库仍保留 `bin/cwiki.mjs` 作为 npm/Node 兼容包装器，但实际实现已经迁到 `bin/cwiki.py`。
+
+依赖要求：
+
+- Python 3.10+
+- 只有在需要全局 `cwiki` 包装命令时才需要 Node/npm
 
 ## 命令
 

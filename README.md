@@ -32,7 +32,8 @@ wiki/ summaries, entities, concepts, comparisons, overview, synthesis
 ```text
 .
 ├── AGENTS.md                 Agent rules for this project
-├── bin/cwiki.mjs             Zero-dependency CLI
+├── bin/cwiki.py              Zero-dependency Python CLI
+├── bin/cwiki.mjs             Node/npm compatibility wrapper
 ├── templates/                Files copied into a new wiki
 │   ├── AGENTS.md
 │   ├── CLAUDE.md
@@ -54,13 +55,67 @@ wiki/ summaries, entities, concepts, comparisons, overview, synthesis
 
 ## Quick Start
 
-Use directly from this checkout:
+### 1. Clone
+
+```bash
+git clone https://github.com/Forever5471/llm-compound-wiki.git
+cd llm-compound-wiki
+```
+
+### 2. Create a Wiki
+
+Use the Python CLI directly from the checkout:
 
 ```bash
 python3 ./bin/cwiki.py init ./my-wiki --domain "AI research notes"
 cd my-wiki
 python3 ../bin/cwiki.py lint .
 ```
+
+This creates a wiki with `raw/`, `wiki/`, `.cwiki/prompts/`, `CLAUDE.md`, `AGENTS.md`, `WIKI_SCHEMA.md`, and workflow skills.
+
+### 3. Add Sources
+
+Put source files under `my-wiki/raw/`, or capture a URL/file:
+
+```bash
+python3 ../bin/cwiki.py capture . https://example.com/article --title "Example Article"
+python3 ../bin/cwiki.py capture . ./notes.md --title "Project Notes"
+```
+
+`capture` writes immutable source records under `raw/captures/` and creates ingest prompts under `.cwiki/prompts/`.
+
+### 4. Ask an Agent to Ingest
+
+Open the generated wiki folder in Codex, Claude Code, OpenCode, Cursor, or another filesystem-capable agent, then ask:
+
+```text
+Read CLAUDE.md and WIKI_SCHEMA.md, then process .cwiki/prompts/ingest-xxx.md.
+```
+
+The agent should compile the source into:
+
+```text
+wiki/
+├── overview.md
+├── synthesis.md
+├── summaries/
+├── entities/
+├── concepts/
+├── comparisons/
+├── index.md
+└── log.md
+```
+
+### 5. Maintain and Search
+
+```bash
+python3 ../bin/cwiki.py index .
+python3 ../bin/cwiki.py lint .
+python3 ../bin/cwiki.py search . "retrieval"
+```
+
+## Optional npm Wrapper
 
 If you still want an npm-style command, install from this checkout; the npm entrypoint simply delegates to Python:
 
@@ -72,6 +127,11 @@ cwiki lint ./my-wiki
 ```
 
 The repository keeps a small `bin/cwiki.mjs` Node wrapper for npm compatibility. The actual implementation lives in `bin/cwiki.py`.
+
+Requirements:
+
+- Python 3.10+
+- Node/npm only if you want the optional global `cwiki` wrapper
 
 ## CLI Commands
 
