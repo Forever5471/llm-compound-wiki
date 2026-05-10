@@ -27,6 +27,8 @@ TEMPLATE_ROOT = PROJECT_ROOT / "templates"
 WIKI_SECTIONS = ["summaries", "entities", "concepts", "comparisons"]
 IGNORED_WIKI_FILES = {"index.md", "log.md"}
 DEFAULT_TOP_K = 6
+DEFAULT_WIKI_WEIGHT = 0.6
+DEFAULT_WEB_WEIGHT = 0.4
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
 DEFAULT_GLM_MODEL = "glm-4.6v"
 DEFAULT_GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
@@ -128,6 +130,38 @@ def load_dotenv(path: Path) -> None:
 def load_local_env(root: Path) -> None:
     for env_file in (PROJECT_ROOT / ".env", Path.cwd() / ".env", root / ".env"):
         load_dotenv(env_file)
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError as error:
+        raise RuntimeError(f"Invalid float for {name}: {value}") from error
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        raise RuntimeError(f"Invalid integer for {name}: {value}") from error
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    raise RuntimeError(f"Invalid boolean for {name}: {value}")
 
 
 def write_if_missing(path: Path, content: str) -> bool:
@@ -250,6 +284,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             "!.cwiki/prompts/.gitkeep\n"
             ".cwiki/briefs/**\n"
             ".cwiki/answers/**\n"
+            ".cwiki/web-research/**\n"
             ".env\n"
             ".DS_Store\n"
         ),
@@ -849,6 +884,412 @@ def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_contex
         print(prompt)
 
 
+def create_web_query_prompt(
+    target: str,
+    question: str,
+    top_k: int = DEFAULT_TOP_K,
+    max_web_sources: int = 6,
+    wiki_weight: float = DEFAULT_WIKI_WEIGHT,
+    web_weight: float = DEFAULT_WEB_WEIGHT,
+    web_enabled: bool = True,
+) -> tuple[Path, Path, Path, Path, list[tuple[Page, int]], str, str]:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    validate_weights(wiki_weight, web_weight)
+    pages = collect_pages(root)
+    hits = find_hits(pages, question, limit=top_k)
+    date = today()
+    slug = slugify(question)
+    ensure_dir(root / ".cwiki" / "prompts")
+    ensure_dir(root / ".cwiki" / "briefs")
+    ensure_dir(root / ".cwiki" / "web-research")
+    prompt_file = root / ".cwiki" / "prompts" / f"web-query-{date}-{slug}.md"
+    fusion_prompt_file = root / ".cwiki" / "prompts" / f"fusion-{date}-{slug}.md"
+    brief_file = root / ".cwiki" / "briefs" / f"web-brief-{date}-{slug}.md"
+    research_file = root / ".cwiki" / "web-research" / f"web-research-{date}-{slug}.md"
+    effective_web_sources = max_web_sources if web_enabled and web_weight > 0 else 0
+    web_mode = "enabled" if effective_web_sources > 0 else "disabled"
+
+    if hits:
+        context_sections = "\n\n".join(
+            f"""## [[{page.slug}]] — {page.title}
+
+- File: `{page.rel}`
+- Kind: `{page.kind}`
+- Tags: {page.tags or "-"}
+- Updated: {page.updated or "-"}
+- Search score: {score}
+
+```markdown
+{compact_page_context(page)}
+```"""
+            for page, score in hits
+        )
+        relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits)
+    else:
+        context_sections = "No directly matching wiki pages were found. Use `wiki/index.md` to understand the local wiki before browsing."
+        relevant_pages = "- No direct matches"
+
+    prompt = f"""---
+title: Web Query Prompt - {question}
+tags: [query, web, prompt]
+sources: {len(hits)}
+updated: {date}
+status: pending
+wiki_weight: {wiki_weight}
+web_weight: {web_weight}
+web_mode: {web_mode}
+---
+
+# Web Query Prompt - {question}
+
+## Question
+
+{question}
+
+## Local Wiki Context
+
+{relevant_pages}
+
+## Agent Browser Protocol
+
+Use the `wiki-agent-browser` skill. Combine the local wiki with current web evidence, but keep the layers distinguishable.
+
+Evidence weights for final synthesis:
+
+- Local wiki weight: {wiki_weight}
+- Web search weight: {web_weight}
+- Web mode: {web_mode}
+
+If web mode is `disabled`, do not search the web. Use local wiki evidence only and state that web evidence was intentionally disabled.
+
+1. Read `CLAUDE.md`, `WIKI_SCHEMA.md`, and `wiki/index.md`.
+2. Read the relevant local pages below in full from disk before answering.
+3. Search the web for up to {effective_web_sources} high-quality sources that materially affect the answer.
+4. Prefer primary sources, official documentation, standards, filings, papers, release notes, or reputable data providers.
+5. Open and inspect each cited web source. Do not cite search result snippets as evidence.
+6. For every external factual claim, cite a URL and include the access date `{date}`.
+7. Write findings into `{research_file.relative_to(root).as_posix()}`.
+8. Then use `{fusion_prompt_file.relative_to(root).as_posix()}` to produce the final answer.
+9. Separate `Local wiki evidence`, `Web evidence`, `Synthesis`, `Gaps`, and `Sources`.
+10. If web evidence should become durable wiki knowledge, first run `cwiki capture . <url> --title "<title>"`, then process the generated ingest prompt with user approval.
+11. Do not silently overwrite local wiki conclusions with web results. Call out conflicts and uncertainty.
+
+## Required Source Table
+
+| Title | URL | Publisher / Author | Accessed | Why it matters |
+|---|---|---|---|---|
+|  |  |  | {date} |  |
+
+## Context Pack
+
+{context_sections}
+"""
+    prompt_file.write_text(prompt, encoding="utf-8")
+    research = render_web_research_template(question, hits, wiki_weight, web_weight, web_mode, effective_web_sources)
+    research_file.write_text(research, encoding="utf-8")
+    fusion_prompt = render_fusion_prompt(question, hits, research_file, wiki_weight, web_weight, web_mode)
+    fusion_prompt_file.write_text(fusion_prompt, encoding="utf-8")
+    brief = render_web_brief(question, hits, prompt_file, fusion_prompt_file, research_file, effective_web_sources, wiki_weight, web_weight, web_mode)
+    brief_file.write_text(brief, encoding="utf-8")
+    return prompt_file, brief_file, research_file, fusion_prompt_file, hits, prompt, brief
+
+
+def validate_weights(wiki_weight: float, web_weight: float) -> None:
+    if wiki_weight < 0 or web_weight < 0:
+        raise RuntimeError("Evidence weights must be non-negative.")
+    if wiki_weight == 0 and web_weight == 0:
+        raise RuntimeError("At least one evidence weight must be greater than 0.")
+
+
+def render_weight_guidance(wiki_weight: float, web_weight: float, web_mode: str) -> str:
+    if web_mode == "disabled" or web_weight == 0:
+        return "Web evidence is disabled. Use local wiki evidence only, and state that no web search was requested."
+    if web_weight > wiki_weight:
+        return "Web evidence has higher synthesis weight, but it still must be traceable and checked against local wiki context."
+    if wiki_weight > web_weight:
+        return "Local wiki evidence has higher synthesis weight. Use web evidence mainly to update, verify, or challenge local conclusions."
+    return "Local wiki evidence and web evidence have equal synthesis weight. Reconcile conflicts explicitly."
+
+
+def render_web_research_template(
+    question: str,
+    hits: list[tuple[Page, int]],
+    wiki_weight: float,
+    web_weight: float,
+    web_mode: str,
+    max_web_sources: int,
+) -> str:
+    date = today()
+    relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}` — {page.summary}" for page, score in hits)
+    if not relevant_pages:
+        relevant_pages = "- No direct local matches"
+    return f"""---
+title: Web Research - {question}
+tags: [query, web-research]
+sources: 0
+updated: {date}
+status: pending
+wiki_weight: {wiki_weight}
+web_weight: {web_weight}
+web_mode: {web_mode}
+---
+
+# Web Research - {question}
+
+This is the browser research workspace. Fill it before producing the final answer from the fusion prompt.
+
+## Question
+
+{question}
+
+## Evidence Weights
+
+- Local wiki weight: {wiki_weight}
+- Web search weight: {web_weight}
+- Web mode: {web_mode}
+- Guidance: {render_weight_guidance(wiki_weight, web_weight, web_mode)}
+
+## Local Wiki Evidence
+
+{relevant_pages}
+
+## Web Search Plan
+
+- Max web sources: {max_web_sources}
+- If max web sources is `0`, do not browse.
+- Prefer primary sources and durable references.
+- Open each source before citing it.
+
+## Web Sources
+
+| Title | URL | Publisher / Author | Published | Accessed | Why it matters |
+|---|---|---|---|---|---|
+
+## Extracted Web Claims
+
+| Claim | Source URL | Confidence | Last checked |
+|---|---|---:|---|
+
+## Conflicts With Local Wiki
+
+- None recorded yet.
+
+## Synthesis Notes
+
+- Pending browser research.
+
+## Gaps
+
+- Pending browser research.
+
+## Recommended Captures
+
+- Add `cwiki capture . <url> --title "<title>"` commands for durable web sources worth ingesting.
+"""
+
+
+def render_fusion_prompt(
+    question: str,
+    hits: list[tuple[Page, int]],
+    research_file: Path,
+    wiki_weight: float,
+    web_weight: float,
+    web_mode: str,
+) -> str:
+    date = today()
+    relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits)
+    if not relevant_pages:
+        relevant_pages = "- No direct local matches"
+    return f"""---
+title: Evidence Fusion Prompt - {question}
+tags: [query, fusion, prompt]
+sources: {len(hits)}
+updated: {date}
+status: pending
+wiki_weight: {wiki_weight}
+web_weight: {web_weight}
+web_mode: {web_mode}
+---
+
+# Evidence Fusion Prompt - {question}
+
+## Question
+
+{question}
+
+## Evidence Inputs
+
+### Local Wiki Pages
+
+{relevant_pages}
+
+### Web Research File
+
+`{research_file.as_posix()}`
+
+## Fusion Policy
+
+- Local wiki weight: {wiki_weight}
+- Web search weight: {web_weight}
+- Web mode: {web_mode}
+- Guidance: {render_weight_guidance(wiki_weight, web_weight, web_mode)}
+
+## Instructions For The Answering Agent
+
+1. Read `CLAUDE.md`, `WIKI_SCHEMA.md`, and `wiki/index.md`.
+2. Read the local wiki pages listed above in full.
+3. Read the web research file after browser research has been completed.
+4. If web mode is `disabled`, do not browse and ignore empty web sections.
+5. Produce a final answer with sections for local wiki evidence, web evidence, synthesis, gaps, and sources.
+6. Use local citations like `[[slug]]` and source paths from claim ledgers.
+7. Use Markdown links for web sources and include access dates from the research file.
+8. If local and web evidence conflict, explain the conflict and which source has more weight under the configured policy.
+9. Do not write the final answer into `wiki/` unless the user asks to preserve it.
+"""
+
+
+def render_web_brief(
+    question: str,
+    hits: list[tuple[Page, int]],
+    prompt_file: Path,
+    fusion_prompt_file: Path,
+    research_file: Path,
+    max_web_sources: int,
+    wiki_weight: float,
+    web_weight: float,
+    web_mode: str,
+) -> str:
+    date = today()
+    chinese = contains_chinese(question) or any(contains_chinese(page.text) for page, _ in hits)
+    relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}` — {page.summary}" for page, score in hits)
+    if not relevant_pages:
+        relevant_pages = "- No direct local matches"
+
+    if chinese:
+        return f"""---
+title: Web Brief - {question}
+tags: [query, web, brief]
+sources: {len(hits)}
+updated: {date}
+status: draft
+---
+
+# Web Brief - {question}
+
+这是一份联网研究任务摘要，不是最终答案。它会把本地 wiki 相关页面和网络检索要求放在一起，交给具备浏览器/搜索能力的 agent 执行。
+
+## 问题
+
+{question}
+
+## 本地相关页面
+
+{relevant_pages}
+
+## 联网要求
+
+- 最多选择 {max_web_sources} 个高质量网络来源。
+- 证据权重：本地 wiki `{wiki_weight}`，web search `{web_weight}`，web mode `{web_mode}`。
+- {render_weight_guidance(wiki_weight, web_weight, web_mode)}
+- 必须打开来源正文后再引用，不要引用搜索结果摘要。
+- 外部事实必须带 URL、发布方/作者和访问日期 `{date}`。
+- 回答时区分本地 wiki 证据、网络证据、综合结论和缺口。
+- 值得沉淀的网络来源先用 `cwiki capture` 记录到 `raw/captures/`，再由 agent 摄入到 `wiki/`。
+
+## 中间产物
+
+- Web query prompt: `{prompt_file.name}`
+- Web research workspace: `{research_file.name}`
+- Evidence fusion prompt: `{fusion_prompt_file.name}`
+"""
+
+    return f"""---
+title: Web Brief - {question}
+tags: [query, web, brief]
+sources: {len(hits)}
+updated: {date}
+status: draft
+---
+
+# Web Brief - {question}
+
+This is a web research task brief, not a final answer. It combines local wiki context with explicit browser research requirements for a browser-capable agent.
+
+## Question
+
+{question}
+
+## Relevant Local Pages
+
+{relevant_pages}
+
+## Web Requirements
+
+- Select up to {max_web_sources} high-quality web sources.
+- Evidence weights: local wiki `{wiki_weight}`, web search `{web_weight}`, web mode `{web_mode}`.
+- {render_weight_guidance(wiki_weight, web_weight, web_mode)}
+- Open the source body before citing it; do not cite search snippets.
+- External factual claims need a URL, publisher/author, and access date `{date}`.
+- Separate local wiki evidence, web evidence, synthesis, and gaps.
+- Durable web sources should be captured with `cwiki capture` before ingesting them into `wiki/`.
+
+## Artifacts
+
+- Web query prompt: `{prompt_file.name}`
+- Web research workspace: `{research_file.name}`
+- Evidence fusion prompt: `{fusion_prompt_file.name}`
+"""
+
+
+def web_ask_wiki(
+    target: str,
+    question: str,
+    top_k: int = DEFAULT_TOP_K,
+    max_web_sources: int | None = None,
+    wiki_weight: float | None = None,
+    web_weight: float | None = None,
+    no_web: bool = False,
+    show_context: bool = False,
+) -> None:
+    root = Path(target).resolve()
+    load_local_env(root)
+    resolved_wiki_weight = wiki_weight if wiki_weight is not None else env_float("CWIKI_WEB_WIKI_WEIGHT", DEFAULT_WIKI_WEIGHT)
+    resolved_web_weight = web_weight if web_weight is not None else env_float("CWIKI_WEB_WEIGHT", DEFAULT_WEB_WEIGHT)
+    resolved_max_web_sources = (
+        max_web_sources if max_web_sources is not None else env_int("CWIKI_WEB_MAX_SOURCES", 6)
+    )
+    env_web_enabled = env_bool("CWIKI_WEB_ENABLED", True)
+    if no_web:
+        env_web_enabled = False
+    web_enabled = env_web_enabled and resolved_web_weight > 0 and resolved_max_web_sources > 0
+    prompt_file, brief_file, research_file, fusion_prompt_file, hits, prompt, brief = create_web_query_prompt(
+        target,
+        question,
+        top_k,
+        resolved_max_web_sources,
+        resolved_wiki_weight,
+        resolved_web_weight,
+        web_enabled,
+    )
+    print(f"Created web query prompt: {prompt_file.relative_to(root).as_posix()}")
+    print(f"Created web brief: {brief_file.relative_to(root).as_posix()}")
+    print(f"Created web research workspace: {research_file.relative_to(root).as_posix()}")
+    print(f"Created evidence fusion prompt: {fusion_prompt_file.relative_to(root).as_posix()}")
+    print(f"Evidence weights: wiki={resolved_wiki_weight}, web={resolved_web_weight}, web_mode={'enabled' if web_enabled else 'disabled'}")
+    if hits:
+        print("Relevant local pages:")
+        for page, score in hits:
+            print(f"- [[{page.slug}]] ({score}) {page.rel}")
+    else:
+        print("Relevant local pages: no direct matches")
+    if show_context:
+        print("\n--- Web Brief ---")
+        print(brief)
+        print("\n--- Web Query Prompt ---")
+        print(prompt)
+
+
 def answer_wiki(
     target: str,
     question: str,
@@ -1365,6 +1806,7 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki init ./my-wiki --domain "AI research notes"
   cwiki capture . https://example.com/article --title "Example Article"
   cwiki ask . "What does this wiki know about retrieval?"
+  cwiki web-ask . "What changed recently about this topic?" --wiki-weight 0.6 --web-weight 0.4
   cwiki answer . "What does this wiki know about retrieval?" --provider glm --model glm-4.6v
   cwiki search . "retrieval"
   cwiki lint .
@@ -1391,6 +1833,19 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("question", nargs="+")
     ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     ask_parser.add_argument("--show-context", action="store_true")
+
+    web_ask_parser = subparsers.add_parser(
+        "web-ask",
+        help="Create a browser-agent prompt that combines local wiki context with web research",
+    )
+    web_ask_parser.add_argument("dir")
+    web_ask_parser.add_argument("question", nargs="+")
+    web_ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    web_ask_parser.add_argument("--max-web-sources", type=int, default=None)
+    web_ask_parser.add_argument("--wiki-weight", type=float, default=None)
+    web_ask_parser.add_argument("--web-weight", type=float, default=None)
+    web_ask_parser.add_argument("--no-web", action="store_true")
+    web_ask_parser.add_argument("--show-context", action="store_true")
 
     answer_parser = subparsers.add_parser("answer", help="Answer a question using a model and wiki context")
     answer_parser.add_argument("dir")
@@ -1428,6 +1883,17 @@ def main(argv: list[str] | None = None) -> int:
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":
             ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context)
+        elif args.command == "web-ask":
+            web_ask_wiki(
+                args.dir,
+                " ".join(args.question),
+                args.top_k,
+                args.max_web_sources,
+                args.wiki_weight,
+                args.web_weight,
+                args.no_web,
+                args.show_context,
+            )
         elif args.command == "answer":
             return answer_wiki(
                 args.dir,

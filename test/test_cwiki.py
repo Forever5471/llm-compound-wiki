@@ -41,6 +41,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".env", gitignore)
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
+            self.assertIn(".cwiki/web-research/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -48,6 +49,7 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-image" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-pptx" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-xlsx" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "wiki-agent-browser" / "SKILL.md").exists())
 
             self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text())
             claude = (root / "CLAUDE.md").read_text()
@@ -275,6 +277,109 @@ Retrieval finds relevant evidence before synthesis.
             brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(brief.exists())
+
+    def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Web ask test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki(
+                "web-ask",
+                str(root),
+                "What changed recently about retrieval?",
+                "--max-web-sources",
+                "4",
+                "--wiki-weight",
+                "0.7",
+                "--web-weight",
+                "0.3",
+            )
+            self.assertIn("Created web query prompt:", result.stdout)
+            self.assertIn("Created web brief:", result.stdout)
+            self.assertIn("Created web research workspace:", result.stdout)
+            self.assertIn("Created evidence fusion prompt:", result.stdout)
+            self.assertIn("Evidence weights: wiki=0.7, web=0.3, web_mode=enabled", result.stdout)
+            self.assertIn("[[retrieval]]", result.stdout)
+
+            prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            fusion = root / ".cwiki" / "prompts" / f"fusion-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            brief = root / ".cwiki" / "briefs" / f"web-brief-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            self.assertTrue(prompt.exists())
+            self.assertTrue(fusion.exists())
+            self.assertTrue(brief.exists())
+            self.assertTrue(research.exists())
+            prompt_text = prompt.read_text()
+            self.assertIn("wiki-agent-browser", prompt_text)
+            self.assertIn("Search the web for up to 4 high-quality sources", prompt_text)
+            self.assertIn("Do not cite search result snippets", prompt_text)
+            self.assertIn("For every external factual claim, cite a URL", prompt_text)
+            self.assertIn("Local wiki weight: 0.7", prompt_text)
+            self.assertIn("Web search weight: 0.3", prompt_text)
+            self.assertIn("web_mode: enabled", research.read_text())
+            self.assertIn("Evidence Fusion Prompt", fusion.read_text())
+
+    def test_web_ask_can_disable_web_research(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "No web test")
+            result = run_cwiki(
+                "web-ask",
+                str(root),
+                "Answer from local wiki only",
+                "--no-web",
+                "--web-weight",
+                "0",
+            )
+
+            self.assertIn("web_mode=disabled", result.stdout)
+            prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
+            research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
+            self.assertIn("Web mode: disabled", prompt.read_text())
+            self.assertIn("Search the web for up to 0 high-quality sources", prompt.read_text())
+            self.assertIn("web_mode: disabled", research.read_text())
+
+    def test_web_ask_reads_defaults_from_env_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Web env test")
+            (root / ".env").write_text(
+                "\n".join(
+                    [
+                        "CWIKI_WEB_WIKI_WEIGHT=0.8",
+                        "CWIKI_WEB_WEIGHT=0.2",
+                        "CWIKI_WEB_MAX_SOURCES=3",
+                        "CWIKI_WEB_ENABLED=false",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("web-ask", str(root), "Use env web defaults")
+            self.assertIn("Evidence weights: wiki=0.8, web=0.2, web_mode=disabled", result.stdout)
+
+            prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-use-env-web-defaults.md"
+            text = prompt.read_text()
+            self.assertIn("Local wiki weight: 0.8", text)
+            self.assertIn("Web search weight: 0.2", text)
+            self.assertIn("Web mode: disabled", text)
+            self.assertIn("Search the web for up to 0 high-quality sources", text)
 
     def test_answer_supports_glm_provider_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:

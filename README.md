@@ -121,6 +121,7 @@ python3 ../bin/cwiki.py index .
 python3 ../bin/cwiki.py lint .
 python3 ../bin/cwiki.py search . "retrieval"
 python3 ../bin/cwiki.py ask . "What does this wiki know about retrieval?"
+python3 ../bin/cwiki.py web-ask . "What changed recently about this topic?" --wiki-weight 0.6 --web-weight 0.4
 OPENAI_API_KEY=... python3 ../bin/cwiki.py answer . "What does this wiki know about retrieval?"
 ```
 
@@ -150,6 +151,7 @@ cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
+cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
 cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
@@ -157,6 +159,10 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
 `ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
+
+`web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
+
+A browser-capable agent using `wiki-agent-browser` should read the local wiki first, search the web when enabled, open source pages before citing them, and record results under `.cwiki/web-research/`. Final answers should separate local evidence, web evidence, synthesis, and gaps. Every external factual claim needs an exact URL and access date. Durable web sources should be recorded with `cwiki capture . <url> --title "<title>"` before they are ingested into `wiki/`.
 
 `answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 
@@ -169,6 +175,12 @@ CWIKI_PROVIDER=glm
 CWIKI_GLM_MODEL=glm-4.6v
 GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 GLM_API_KEY=your-local-key
+
+# web-ask defaults
+CWIKI_WEB_WIKI_WEIGHT=0.6
+CWIKI_WEB_WEIGHT=0.4
+CWIKI_WEB_MAX_SOURCES=6
+CWIKI_WEB_ENABLED=true
 ```
 
 Then run:
@@ -181,6 +193,13 @@ You can also override the provider and model per command:
 
 ```bash
 python3 ../bin/cwiki.py answer . "How is gray_zone designed?" --provider glm --model glm-4.6v
+```
+
+`web-ask` reads these `.env` defaults. Command-line options take precedence:
+
+```bash
+python3 ../bin/cwiki.py web-ask . "Question" --wiki-weight 0.8 --web-weight 0.2
+python3 ../bin/cwiki.py web-ask . "Question" --no-web
 ```
 
 ## Page Format
@@ -225,7 +244,7 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 
 `CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
 
-The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-parse-xlsx`, `wiki-ingest`, `wiki-query`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
+The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-parse-xlsx`, `wiki-ingest`, `wiki-query`, `wiki-agent-browser`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
 
 ## Design Principles
 

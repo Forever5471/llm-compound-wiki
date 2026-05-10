@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +33,7 @@ test("init creates a usable wiki", async () => {
   assert.equal(existsSync(path.join(dir, "wiki", "comparisons")), true);
   assert.equal(existsSync(path.join(dir, ".claude", "skills", "wiki-init", "SKILL.md")), true);
   assert.equal(existsSync(path.join(dir, ".agents", "skills", "wiki-ingest", "SKILL.md")), true);
+  assert.equal(existsSync(path.join(dir, ".claude", "skills", "wiki-agent-browser", "SKILL.md")), true);
 
   const schema = await readFile(path.join(dir, "WIKI_SCHEMA.md"), "utf8");
   assert.match(schema, /Domain: Test knowledge/);
@@ -130,6 +131,6 @@ test("capture creates raw record and ingest prompt", async () => {
 
   const rawDir = path.join(dir, "raw", "captures");
   assert.equal(existsSync(rawDir), true);
-  const prompt = path.join(dir, ".cwiki", "prompts", `ingest-${new Date().toISOString().slice(0, 10)}-some-article.md`);
-  assert.equal(existsSync(prompt), true);
+  const prompts = await readdir(path.join(dir, ".cwiki", "prompts"));
+  assert.equal(prompts.some((name) => /^ingest-\d{4}-\d{2}-\d{2}-some-article\.md$/.test(name)), true);
 });

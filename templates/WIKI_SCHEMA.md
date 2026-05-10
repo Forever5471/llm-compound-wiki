@@ -115,6 +115,22 @@ What the wiki currently believes, in prose.
 5. State gaps explicitly.
 6. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
 
+## Agent Browser Workflow
+
+Use this when a question needs current web evidence in addition to the compiled wiki.
+
+1. Run `cwiki web-ask . "<question>"` to create a browser-agent prompt, web research workspace, and evidence fusion prompt.
+2. Read the generated `.cwiki/prompts/web-query-*.md`.
+3. Read local wiki context before browsing.
+4. Respect evidence weights in the prompt. Use `--web-weight 0` or `--no-web` to disable browsing.
+5. Search the web when enabled, open each cited source, and avoid citing search result snippets.
+6. Prefer primary sources and durable references over summaries or scraped pages.
+7. Write web findings into `.cwiki/web-research/*.md`.
+8. Read `.cwiki/prompts/fusion-*.md` to produce the final answer.
+9. Answer with separate local wiki evidence, web evidence, synthesis, gaps, and sources.
+10. Cite local pages as `[[topic]]`; cite web facts with exact URLs and access dates.
+11. If web evidence should become durable wiki knowledge, capture the URL with `cwiki capture`, then ingest it into `wiki/` with source-backed claim ledger rows.
+
 ## Lint Workflow
 
 Run `cwiki lint .` and inspect:

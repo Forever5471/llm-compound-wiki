@@ -93,6 +93,23 @@ Action:
 5. State gaps explicitly.
 6. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 
+### Agent Browser
+
+Trigger when the user asks for current, recent, latest, market, policy, pricing, benchmark, release, news, or any answer that needs live web evidence.
+
+Action:
+
+1. Use `wiki-agent-browser`.
+2. Run `cwiki web-ask . "<question>"` if no web query prompt exists. Use `--web-weight 0` or `--no-web` when the user wants web search disabled.
+3. Read local wiki context first.
+4. Search and open web sources when web mode is enabled; never cite search result snippets.
+5. Write web findings into `.cwiki/web-research/*.md`.
+6. Read the generated `.cwiki/prompts/fusion-*.md` to produce the final answer.
+7. Respect evidence weights from the prompt when reconciling local wiki and web evidence.
+8. Answer with separate local wiki evidence, web evidence, synthesis, gaps, and sources.
+9. Cite local pages as `[[slug]]`; cite external facts with exact URLs and access dates.
+10. If the web source should become durable knowledge, run `cwiki capture . <url> --title "<title>"`, process the ingest prompt, update `wiki/index.md`, and append to `wiki/log.md`.
+
 ### Update
 
 Trigger when the user asks to revise, correct, merge, or reconcile wiki content.
@@ -126,6 +143,7 @@ Use the local CLI when available:
 cwiki index .
 cwiki lint .
 cwiki search . "<query>"
+cwiki web-ask . "<question>"
 ```
 
 If `cwiki` is not installed globally, use the relative path to this project's `bin/cwiki.mjs`.

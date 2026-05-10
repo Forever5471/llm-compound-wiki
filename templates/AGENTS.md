@@ -21,6 +21,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - If both exist, prefer `.claude/skills/<skill>/SKILL.md` as the source of truth.
 - Use `wiki-capture` before `wiki-ingest` when a source file or URL still needs to be recorded under `raw/captures/`.
 - For complex source formats, use the built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`.
+- For current web research that combines local wiki context with online evidence, use `wiki-agent-browser` and start with `cwiki web-ask . "<question>"`. Use `--web-weight 0` or `--no-web` when web search should be disabled.
 
 ## Operating Principles
 
@@ -31,4 +32,6 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - Preserve source language during ingest. Chinese sources produce Chinese wiki pages; English sources produce English wiki pages. Do not translate by default unless the user asks.
 - Keep contradictions visible until resolved. Do not silently erase uncertainty.
 - Valuable query answers should be offered as updates to `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+- Web evidence is external until captured. Cite exact URLs and access dates, then use `cwiki capture` before ingesting important web sources into `wiki/`.
+- Browser research should be recorded under `.cwiki/web-research/`, then fused with local wiki evidence through the generated `.cwiki/prompts/fusion-*.md`.
 - Use `cwiki lint .` periodically to find broken links, stale claims, and orphan pages.

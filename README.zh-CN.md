@@ -116,6 +116,7 @@ python3 ../bin/cwiki.py index .
 python3 ../bin/cwiki.py lint .
 python3 ../bin/cwiki.py search . "retrieval"
 python3 ../bin/cwiki.py ask . "这个 wiki 对 retrieval 有什么结论？"
+python3 ../bin/cwiki.py web-ask . "这个主题最近有什么变化？" --wiki-weight 0.6 --web-weight 0.4
 OPENAI_API_KEY=... python3 ../bin/cwiki.py answer . "这个 wiki 对 retrieval 有什么结论？"
 ```
 
@@ -145,6 +146,7 @@ cwiki index <dir>
 cwiki lint <dir>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
+cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
 cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
@@ -152,6 +154,10 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
 `ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+
+`web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
+
+具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
 
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
@@ -164,6 +170,12 @@ CWIKI_PROVIDER=glm
 CWIKI_GLM_MODEL=glm-4.6v
 GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 GLM_API_KEY=your-local-key
+
+# web-ask 默认策略
+CWIKI_WEB_WIKI_WEIGHT=0.6
+CWIKI_WEB_WEIGHT=0.4
+CWIKI_WEB_MAX_SOURCES=6
+CWIKI_WEB_ENABLED=true
 ```
 
 然后直接运行：
@@ -176,6 +188,13 @@ python3 ../bin/cwiki.py answer . "gray_zone是怎么设计的"
 
 ```bash
 python3 ../bin/cwiki.py answer . "gray_zone是怎么设计的" --provider glm --model glm-4.6v
+```
+
+`web-ask` 会读取这些 `.env` 默认值；命令行参数优先级更高。例如下面会临时覆盖 `.env`：
+
+```bash
+python3 ../bin/cwiki.py web-ask . "问题" --wiki-weight 0.8 --web-weight 0.2
+python3 ../bin/cwiki.py web-ask . "问题" --no-web
 ```
 
 ## 页面规范
@@ -220,7 +239,7 @@ status: active
 
 初始化后的 wiki 会同时生成 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议。
 
-同时会生成 `wiki-init`、`wiki-capture`、`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-parse-xlsx`、`wiki-ingest`、`wiki-query`、`wiki-update`、`wiki-lint` 等技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
+同时会生成 `wiki-init`、`wiki-capture`、`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-parse-xlsx`、`wiki-ingest`、`wiki-query`、`wiki-agent-browser`、`wiki-update`、`wiki-lint` 等技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
 
 ## 开源定位
 
