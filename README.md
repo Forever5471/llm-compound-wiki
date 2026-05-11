@@ -4,6 +4,12 @@
 
 LLM Compound Wiki is an open-source scaffold for building a personal or team wiki that an AI agent continuously maintains.
 
+Build an agent-maintained Markdown wiki in any folder.
+
+No database. No embedding service. No vendor lock-in.
+
+Use Codex, Claude Code, Cursor, Trae, OpenCode, or any filesystem-capable agent.
+
 It is inspired by Andrej Karpathy's `llm-wiki` prototype and existing community experiments, but this project takes a slightly different shape:
 
 - agent-agnostic first: Codex, Claude Code, OpenCode, Cursor, or any filesystem-capable agent can use it
@@ -27,6 +33,20 @@ LLM agent reads, reconciles, links, cites
 wiki/ summaries, entities, concepts, comparisons, overview, synthesis
 ```
 
+```mermaid
+flowchart TD
+    raw["raw/ immutable evidence"] --> capture["cwiki capture"]
+    capture --> prompts[".cwiki/prompts/ ingest/query/web-query"]
+    prompts --> agent["filesystem-capable agent + local skills"]
+    agent --> wiki["wiki/ compiled Markdown knowledge"]
+    wiki --> index["cwiki index / search / ask"]
+    wiki --> lint["cwiki lint"]
+    wiki --> claims["claim ledgers + wikilinks + log"]
+    web["web sources"] --> browser["browser-capable agent"]
+    browser --> research[".cwiki/web-research/"]
+    research --> agent
+```
+
 ## Execution Model
 
 LLM Compound Wiki separates the deterministic local tool layer from the intelligent agent layer.
@@ -37,6 +57,29 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 - `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
 - `answer` calls the `.env` configured model, but only against local wiki retrieval.
 - Live web research currently requires a browser-capable agent following `wiki-agent-browser`.
+
+## Feature Positioning
+
+| Capability | LLM Compound Wiki |
+|---|---|
+| Agent-agnostic workflow | Yes |
+| Obsidian-friendly Markdown | Yes |
+| Zero-dependency Python CLI | Yes |
+| Local search without embeddings | Yes |
+| Claim ledger and operation log | Yes |
+| Generated agent skills | Yes |
+| Hosted service | No |
+| Vector database required | No |
+| CLI live web browsing | Not yet |
+| Fully autonomous crawler | No |
+
+## What This Is Not
+
+- Not a hosted knowledge-base app.
+- Not a vector database or embedding service.
+- Not an autonomous crawler that silently rewrites your wiki.
+- Not tied to one model provider, editor, or agent platform.
+- Not a replacement for human judgment about which sources deserve to become durable knowledge.
 
 ## Repository Layout
 

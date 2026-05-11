@@ -2,6 +2,12 @@
 
 LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚手架。
 
+在任意文件夹里构建一个由 agent 持续维护的 Markdown wiki。
+
+不需要数据库。不需要 embedding 服务。不绑定模型或平台。
+
+可以配合 Codex、Claude Code、Cursor、Trae、OpenCode，或任何能读写文件系统的 agent 使用。
+
 它参考了 Andrej Karpathy 提出的 `llm-wiki` 概念原型，也吸收了现有社区项目的 workflow 经验，但我们这版的定位更偏通用基础设施：
 
 - 不绑定 Claude，Codex、Claude Code、OpenCode、Cursor 或其他能读写文件的 agent 都能使用
@@ -24,6 +30,20 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 
 这样知识会累积，而不是散落在一次次对话里。
 
+```mermaid
+flowchart TD
+    raw["raw/ 不可变原始证据"] --> capture["cwiki capture"]
+    capture --> prompts[".cwiki/prompts/ ingest/query/web-query"]
+    prompts --> agent["文件系统 agent + 本地 skills"]
+    agent --> wiki["wiki/ 编译后的 Markdown 知识"]
+    wiki --> index["cwiki index / search / ask"]
+    wiki --> lint["cwiki lint"]
+    wiki --> claims["claim ledger + wikilinks + log"]
+    web["网络来源"] --> browser["具备浏览器能力的 agent"]
+    browser --> research[".cwiki/web-research/"]
+    research --> agent
+```
+
 ## 执行模型
 
 LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
@@ -34,6 +54,29 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 - `ask` 和 `web-ask` 只准备证据和 prompt，不调用大模型。
 - `answer` 会调用 `.env` 配置的大模型，但只基于本地 wiki 检索。
 - 实时联网研究目前需要具备浏览器能力的 agent 按 `wiki-agent-browser` 执行。
+
+## 功能定位
+
+| 能力 | LLM Compound Wiki |
+|---|---|
+| 不绑定具体 agent | 是 |
+| 兼容 Obsidian Markdown | 是 |
+| 零依赖 Python CLI | 是 |
+| 不依赖 embedding 的本地搜索 | 是 |
+| Claim Ledger 和操作日志 | 是 |
+| 初始化后自带 agent skills | 是 |
+| 托管知识库服务 | 否 |
+| 需要向量数据库 | 否 |
+| CLI 直接联网浏览 | 暂未实现 |
+| 全自动爬虫 | 否 |
+
+## 它不是什么
+
+- 不是托管知识库应用。
+- 不是向量数据库或 embedding 服务。
+- 不是会静默重写 wiki 的全自动爬虫。
+- 不绑定某个模型供应商、编辑器或 agent 平台。
+- 不能替代人对“哪些来源值得沉淀为长期知识”的判断。
 
 ## 目录结构
 
