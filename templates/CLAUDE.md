@@ -31,6 +31,18 @@ Before any wiki operation, read:
 
 Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 
+## Local Configuration
+
+- `.env.example` is the template for local model and web-search defaults.
+- Copy `.env.example` to `.env` before running `cwiki answer` with provider API keys.
+- `.env` is ignored by git and should not be committed.
+- `.env` model settings affect terminal/CLI workflows such as `cwiki answer`; they do not change this agent platform's active chat model.
+- `web-ask` reads `.env` defaults such as `CWIKI_WEB_WIKI_WEIGHT`, `CWIKI_WEB_WEIGHT`, `CWIKI_WEB_MAX_SOURCES`, and `CWIKI_WEB_ENABLED`; command-line flags override them.
+- When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
+- Prefer this folder's local instructions and skills before platform-specific skills: read `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, then use `.claude/skills/` or `.agents/skills/` for capture, ingest, query, update, lint, and browser research.
+- If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
+- If the user asks for web evidence, run `cwiki web-ask . "<question>"` when useful, read the generated prompts, perform browser research when enabled, and follow the configured weights during synthesis.
+
 ## Directory Contract
 
 ```text

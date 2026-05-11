@@ -32,6 +32,21 @@ DEFAULT_WEB_WEIGHT = 0.4
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
 DEFAULT_GLM_MODEL = "glm-4.6v"
 DEFAULT_GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+DEFAULT_ENV_EXAMPLE = """CWIKI_PROVIDER=glm
+CWIKI_GLM_MODEL=glm-4.6v
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+GLM_API_KEY=replace-with-your-local-key
+
+# Optional OpenAI defaults
+CWIKI_OPENAI_MODEL=gpt-5.2
+OPENAI_API_KEY=replace-with-your-local-key
+
+# web-ask defaults
+CWIKI_WEB_WIKI_WEIGHT=0.6
+CWIKI_WEB_WEIGHT=0.4
+CWIKI_WEB_MAX_SOURCES=6
+CWIKI_WEB_ENABLED=true
+"""
 STOPWORDS = {
     "a",
     "an",
@@ -172,6 +187,13 @@ def write_if_missing(path: Path, content: str) -> bool:
     return True
 
 
+def env_example_content() -> str:
+    source = PROJECT_ROOT / ".env.example"
+    if source.exists():
+        return source.read_text(encoding="utf-8")
+    return DEFAULT_ENV_EXAMPLE
+
+
 def list_markdown_files(path: Path) -> list[Path]:
     if not path.exists():
         return []
@@ -297,6 +319,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             content = content.replace(key, value)
         write_if_missing(root / template_name, content)
     write_if_missing(root / "AGENTS.md", (TEMPLATE_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    write_if_missing(root / ".env.example", env_example_content())
 
     copy_skills(root)
     write_if_missing(root / "wiki" / "overview.md", starter_page("Overview", "overview", wiki_domain, date))
@@ -318,11 +341,13 @@ Format: `## [YYYY-MM-DD] operation | title`
 ## [{date}] init | {wiki_domain}
 - Created wiki structure
 - Created CLAUDE.md, WIKI_SCHEMA.md, and AGENTS.md
+- Created .env.example for local model and web-search defaults
 - Initialized index and log
 """,
     )
 
     print(f"Initialized LLM Compound Wiki at {root}")
+    print("Config: copy .env.example to .env and add your provider/API keys when you want `cwiki answer` or web defaults.")
     print(f"Next: add sources to {root / 'raw'} or run cwiki capture {root} <file-or-url>")
 
 
@@ -1277,6 +1302,8 @@ def web_ask_wiki(
     print(f"Created web research workspace: {research_file.relative_to(root).as_posix()}")
     print(f"Created evidence fusion prompt: {fusion_prompt_file.relative_to(root).as_posix()}")
     print(f"Evidence weights: wiki={resolved_wiki_weight}, web={resolved_web_weight}, web_mode={'enabled' if web_enabled else 'disabled'}")
+    if web_enabled:
+        print("Next: give the web query prompt to a browser-capable agent using `wiki-agent-browser`; the CLI does not browse by itself.")
     if hits:
         print("Relevant local pages:")
         for page, score in hits:

@@ -67,7 +67,7 @@ cd my-wiki
 python3 ../bin/cwiki.py lint .
 ```
 
-这会创建 `raw/`、`wiki/`、`.cwiki/prompts/`、`CLAUDE.md`、`AGENTS.md`、`WIKI_SCHEMA.md` 和 workflow skills。
+这会创建 `raw/`、`wiki/`、`.cwiki/prompts/`、`CLAUDE.md`、`AGENTS.md`、`WIKI_SCHEMA.md`、`.env.example` 和 workflow skills。
 
 ### 3. 添加资料
 
@@ -157,19 +157,25 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
+CLI 本身不会直接联网浏览。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
+
 具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
 
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
 ## 模型配置
 
-可以在项目目录或具体 wiki 目录下创建本地 `.env`。`.env` 默认不进 git，适合放 API key：
+初始化后的 wiki 会带有 `.env.example`。把它复制成项目目录或具体 wiki 目录下的本地 `.env`；`.env` 默认不进 git，适合放 API key：
 
 ```bash
 CWIKI_PROVIDER=glm
 CWIKI_GLM_MODEL=glm-4.6v
 GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 GLM_API_KEY=your-local-key
+
+# OpenAI 可选默认值
+CWIKI_OPENAI_MODEL=gpt-5.2
+OPENAI_API_KEY=your-local-key
 
 # web-ask 默认策略
 CWIKI_WEB_WIKI_WEIGHT=0.6
@@ -196,6 +202,14 @@ python3 ../bin/cwiki.py answer . "gray_zone是怎么设计的" --provider glm --
 python3 ../bin/cwiki.py web-ask . "问题" --wiki-weight 0.8 --web-weight 0.2
 python3 ../bin/cwiki.py web-ask . "问题" --no-web
 ```
+
+### CLI 配置与 Agent 会话模型
+
+`.env` 里的模型配置控制项目自身通过终端/CLI 执行的流程，例如 `cwiki answer`。它不会改变 Trae、Codex、Claude Code、Cursor 或其他 agent 平台当前聊天会话选用的模型。
+
+如果你让 agent 在初始化后的 wiki 文件夹中工作，最终文字通常由该 agent 当前启用的模型生成。agent 应先读取本地的 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`，优先使用 `.claude/skills/` 或 `.agents/skills/` 里的本地技能，并按这些本地流程完成 capture、ingest、query、update、lint 和 browser research。若本地技能不能覆盖本次任务，agent 可以再使用自己平台提供的工具或探索式实现，但仍应遵守 wiki schema 和来源引用规则。
+
+`.env` 里的 web 证据权重也不是 agent 内部隐藏的重排器。在 CLI 流程中，`cwiki web-ask` 会读取这些权重，并写入浏览器研究 prompt 和 fusion prompt；在 agent 流程中，agent 应按生成 prompt 里的权重或本地 wiki 指令，综合本地 wiki 证据和 web 证据。
 
 ## 页面规范
 
