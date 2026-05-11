@@ -30,6 +30,7 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / "WIKI_SCHEMA.md").exists())
             self.assertTrue((root / "CLAUDE.md").exists())
             self.assertTrue((root / "AGENTS.md").exists())
+            self.assertTrue((root / ".env.example").exists())
             self.assertTrue((root / "wiki" / "index.md").exists())
             self.assertTrue((root / "wiki" / "overview.md").exists())
             self.assertTrue((root / "wiki" / "synthesis.md").exists())
@@ -52,9 +53,22 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / ".claude" / "skills" / "wiki-agent-browser" / "SKILL.md").exists())
 
             self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text())
+            env_example = (root / ".env.example").read_text()
+            self.assertIn("CWIKI_PROVIDER=glm", env_example)
+            self.assertIn("OPENAI_API_KEY=replace-with-your-local-key", env_example)
+            self.assertIn("CWIKI_WEB_WIKI_WEIGHT=0.6", env_example)
             claude = (root / "CLAUDE.md").read_text()
             self.assertIn("Domain: Test knowledge", claude)
             self.assertIn("The human owns `raw/`; the LLM owns `wiki/`", claude)
+            self.assertIn("they do not change this agent platform's active chat model", claude)
+            self.assertIn("use the current agent model for reasoning and final prose", claude)
+            self.assertIn("Prefer this folder's local instructions and skills", claude)
+            self.assertIn("If the local skills do not cover the task", claude)
+            agents = (root / "AGENTS.md").read_text()
+            self.assertIn("they do not change this agent platform's active chat model", agents)
+            self.assertIn("use the current agent model for reasoning and final prose", agents)
+            self.assertIn("Prefer this folder's local instructions and skills", agents)
+            self.assertIn("If the local skills do not cover the task", agents)
 
     def test_index_lists_generated_wiki_sections(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -315,6 +329,7 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("Created web research workspace:", result.stdout)
             self.assertIn("Created evidence fusion prompt:", result.stdout)
             self.assertIn("Evidence weights: wiki=0.7, web=0.3, web_mode=enabled", result.stdout)
+            self.assertIn("the CLI does not browse by itself", result.stdout)
             self.assertIn("[[retrieval]]", result.stdout)
 
             prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
