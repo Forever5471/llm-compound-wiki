@@ -31,6 +31,15 @@ Before any wiki operation, read:
 
 Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 
+## Execution Model
+
+- The CLI is the scaffold and local utility layer: initialize, capture, index, lint, search, and generate prompts or briefs.
+- Agent intelligence runs in the current agent platform. Use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
+- Local skills are instructions for agents, not executable CLI plugins.
+- `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
+- `answer` calls the `.env` configured provider/model against local wiki retrieval, but it does not perform live web search.
+- Live web research requires a browser-capable agent following `wiki-agent-browser`.
+
 ## Local Configuration
 
 - `.env.example` is the template for local model and web-search defaults.

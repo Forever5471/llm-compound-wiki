@@ -27,6 +27,17 @@ LLM agent reads, reconciles, links, cites
 wiki/ summaries, entities, concepts, comparisons, overview, synthesis
 ```
 
+## Execution Model
+
+LLM Compound Wiki separates the deterministic local tool layer from the intelligent agent layer.
+
+- The CLI is the scaffold and local utility layer: initialize a wiki, capture sources, rebuild indexes, lint health, search local pages, and generate auditable prompts or briefs.
+- The generated wiki folder is the agent workspace. Agents should read `AGENTS.md`, `CLAUDE.md`, `WIKI_SCHEMA.md`, and the local skills before changing `wiki/`.
+- The copied skill files are instructions for agents, not executable CLI plugins.
+- `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
+- `answer` calls the `.env` configured model, but only against local wiki retrieval.
+- Live web research currently requires a browser-capable agent following `wiki-agent-browser`.
+
 ## Repository Layout
 
 ```text
@@ -158,7 +169,9 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
-`ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
+`ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
+
+The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings.
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 

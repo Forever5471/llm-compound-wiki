@@ -24,6 +24,17 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 
 这样知识会累积，而不是散落在一次次对话里。
 
+## 执行模型
+
+LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
+
+- CLI 是脚手架和本地工具层：初始化 wiki、捕获来源、重建索引、健康检查、搜索本地页面，以及生成可审计的 prompt 或 brief。
+- 生成后的 wiki 文件夹是 agent 工作区。agent 修改 `wiki/` 前应先读取 `AGENTS.md`、`CLAUDE.md`、`WIKI_SCHEMA.md` 和本地 skills。
+- 复制进去的 skill 文件是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。
+- `ask` 和 `web-ask` 只准备证据和 prompt，不调用大模型。
+- `answer` 会调用 `.env` 配置的大模型，但只基于本地 wiki 检索。
+- 实时联网研究目前需要具备浏览器能力的 agent 按 `wiki-agent-browser` 执行。
+
 ## 目录结构
 
 ```text
@@ -153,7 +164,9 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
-`ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+`ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+
+这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
