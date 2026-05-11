@@ -55,6 +55,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 - Cite source paths or URLs for factual claims.
 - Preserve source language during ingest. Chinese sources produce Chinese wiki pages; English sources produce English wiki pages. Do not translate by default unless the user asks.
 - Keep contradictions visible until resolved. Do not silently erase uncertainty.
+- Treat `wiki/overview.md` and `wiki/synthesis.md` as two alternative first reading surfaces, not placeholders. Use `overview.md` for orientation and navigation while the wiki is still accumulating sources; use `synthesis.md` when source-backed pages support an integrated thesis.
 - Valuable query answers should be offered as updates to `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 - Web evidence is external until captured. Cite exact URLs and access dates, then use `cwiki capture` before ingesting important web sources into `wiki/`.
 - Browser research should be recorded under `.cwiki/web-research/`, then fused with local wiki evidence through the generated `.cwiki/prompts/fusion-*.md`.

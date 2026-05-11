@@ -15,8 +15,8 @@ The human curates sources and sets direction. The agent reads sources, extracts 
 ```text
 raw/              Immutable source material
 wiki/
-  overview.md     High-level map of the whole wiki
-  synthesis.md    Current cross-source synthesis
+  overview.md     Durable map and early-stage entry point
+  synthesis.md    Source-backed cross-page thesis for mature knowledge
   summaries/      Source and topic summaries
   entities/       People, organizations, places, products, projects
   concepts/       Ideas, theories, methods, terms
@@ -35,8 +35,8 @@ wiki/
   - `wiki/entities/<slug>.md` for people, organizations, places, products, projects
   - `wiki/concepts/<slug>.md` for ideas, theories, methods, terms
   - `wiki/comparisons/<slug>.md` for compare/contrast pages
-  - `wiki/overview.md` for the durable map of the knowledge base
-  - `wiki/synthesis.md` for the current integrated thesis across sources
+  - `wiki/overview.md` for the durable map of the knowledge base and the default entry point while evidence is still sparse
+  - `wiki/synthesis.md` for the current integrated thesis across sources once there is enough source-backed material
 - Filenames are lowercase slugs: `retrieval-augmented-generation.md`.
 - Use Obsidian wikilinks: `[[retrieval-augmented-generation]]`.
 - Every generated wiki page must include YAML frontmatter:
@@ -88,6 +88,15 @@ What the wiki currently believes, in prose.
 
 - What should be investigated next?
 ```
+
+## Overview And Synthesis
+
+`overview.md` and `synthesis.md` are not placeholders. They are two alternative first reading surfaces:
+
+- Use `overview.md` as the first screen when the wiki is still accumulating sources. It should orient a reader or agent: scope, important pages, navigation paths, and open map questions.
+- Use `synthesis.md` as the first screen when the wiki has enough source-backed pages to support a durable integrated thesis. It should summarize what the wiki currently believes, what is stable, what is contested, and what evidence would change the conclusion.
+
+Keep both pages lightweight and useful. Do not duplicate `wiki/index.md`; link to the most important pages with short reasons. When the global picture changes, update either the map (`overview.md`) or the thesis (`synthesis.md`) depending on which first reading surface changed.
 
 ## Ingest Workflow
 

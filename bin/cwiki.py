@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 import zipfile
 from dataclasses import dataclass
@@ -268,6 +269,79 @@ status: active
 """
 
 
+def starter_overview_page(domain: str, date: str) -> str:
+    return f"""---
+title: Overview
+kind: overview
+tags: [overview, map]
+sources: 0
+updated: {date}
+status: seed
+---
+
+# Overview
+
+This page is the wiki's durable map for **{domain}**. Use it as the first reading surface while the wiki is still growing; switch to [[synthesis]] first once there is enough source-backed cross-page judgment.
+
+## Entry Decision
+
+- Start here when you need orientation, topic boundaries, or the current page map.
+- Start with [[synthesis]] when you need the current integrated thesis or a decision-ready answer.
+
+## Current Map
+
+- `wiki/summaries/` - source and topic summaries.
+- `wiki/entities/` - people, organizations, products, projects, places, and named systems.
+- `wiki/concepts/` - reusable ideas, methods, mechanisms, and terms.
+- `wiki/comparisons/` - tradeoffs, alternatives, decision matrices, and conflicts.
+
+## Navigation Seeds
+
+- Add the most important pages here after each meaningful ingest.
+- Prefer 5-9 high-signal links over a complete duplicate of `wiki/index.md`.
+- Keep each link annotated with why a reader or agent should open it.
+
+## Open Map Questions
+
+- Which topics are central enough to become entry points?
+- Which pages should be merged, split, or promoted into synthesis?
+"""
+
+
+def starter_synthesis_page(domain: str, date: str) -> str:
+    return f"""---
+title: Synthesis
+kind: synthesis
+tags: [synthesis, thesis]
+sources: 0
+updated: {date}
+status: seed
+---
+
+# Synthesis
+
+This page is the wiki's integrated thesis for **{domain}**. It should become the first reading surface only after the wiki contains enough source-backed pages to support cross-source judgment. Until then, use [[overview]] as the entry point.
+
+## Current Thesis
+
+No source-backed thesis has been promoted yet. When evidence accumulates, replace this seed text with the wiki's best current answer to: what do these sources collectively imply?
+
+## Stable Claims
+
+- Add only claims that are supported by wiki pages, source paths, URLs, or Claim Ledger rows.
+
+## Tensions And Contradictions
+
+- Keep unresolved contradictions visible instead of silently choosing a winner.
+
+## Update Triggers
+
+- New evidence changes the global interpretation.
+- Several topic pages now support one reusable conclusion.
+- A query answer is valuable enough to preserve as durable wiki knowledge.
+"""
+
+
 def copy_skills(root: Path) -> None:
     for namespace in [".claude", ".agents"]:
         skills_root = TEMPLATE_ROOT / namespace / "skills"
@@ -307,6 +381,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             ".cwiki/briefs/**\n"
             ".cwiki/answers/**\n"
             ".cwiki/web-research/**\n"
+            ".cwiki/eval/**\n"
             ".env\n"
             ".DS_Store\n"
         ),
@@ -322,11 +397,8 @@ def init_wiki(target: str, domain: str | None) -> None:
     write_if_missing(root / ".env.example", env_example_content())
 
     copy_skills(root)
-    write_if_missing(root / "wiki" / "overview.md", starter_page("Overview", "overview", wiki_domain, date))
-    write_if_missing(
-        root / "wiki" / "synthesis.md",
-        starter_page("Synthesis", "synthesis", "Current cross-source synthesis. The LLM maintains this as the wiki matures.", date),
-    )
+    write_if_missing(root / "wiki" / "overview.md", starter_overview_page(wiki_domain, date))
+    write_if_missing(root / "wiki" / "synthesis.md", starter_synthesis_page(wiki_domain, date))
     write_if_missing(root / "wiki" / "index.md", render_index([]))
     write_if_missing(
         root / "wiki" / "log.md",
@@ -527,6 +599,588 @@ def lint_wiki(target: str) -> int:
     }
     print_lint(report)
     return 1 if broken or missing_frontmatter else 0
+
+
+def eval_wiki(target: str, output: str | None = None, no_write: bool = False) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    pages = collect_pages(root)
+    result = build_wiki_eval(root, pages)
+    report = render_wiki_eval_report(root, result)
+    print(report)
+
+    if no_write:
+        return
+
+    report_file = Path(output).resolve() if output else default_eval_report_path(root, "wiki-eval")
+    ensure_dir(report_file.parent)
+    report_file.write_text(report, encoding="utf-8")
+    update_eval_index(root, report_file, result)
+    print(f"\nSaved evaluation report: {display_path(report_file, root)}")
+
+
+def build_wiki_eval(root: Path, pages: list[Page]) -> dict[str, object]:
+    language = detect_report_language(pages)
+    warnings: list[dict[str, str]] = []
+    known = {page.slug for page in pages}
+    inbound = {page.slug: 0 for page in pages}
+    broken: list[dict[str, str]] = []
+    missing_frontmatter: list[dict[str, object]] = []
+    slug_issues: list[Page] = []
+    misplaced: list[Page] = []
+    stale_pages: list[Page] = []
+    pages_without_ledger: list[Page] = []
+    claim_rows = 0
+    missing_sources = 0
+    missing_confidence = 0
+    missing_last_checked = 0
+    weak_sources = 0
+
+    required_root_files = ["WIKI_SCHEMA.md", "AGENTS.md", "CLAUDE.md", "wiki/index.md", "wiki/log.md"]
+    missing_required = [path for path in required_root_files if not (root / path).exists()]
+    for path in missing_required:
+        warnings.append(warning("P1", path, eval_text(language, "missing_required_file"), "structure"))
+
+    missing_sections = [section for section in WIKI_SECTIONS if not (root / "wiki" / section).exists()]
+    for section in missing_sections:
+        warnings.append(warning("P1", f"wiki/{section}/", eval_text(language, "missing_section"), "structure"))
+
+    for page in pages:
+        frontmatter = parse_frontmatter(page.text)
+        missing = [key for key in ["title", "kind", "tags", "sources", "updated", "status"] if not frontmatter.get(key)]
+        if missing:
+            missing_frontmatter.append({"page": page, "missing": missing})
+            warnings.append(
+                warning("P2", page.rel, eval_text(language, "missing_frontmatter", fields=", ".join(missing)), "structure")
+            )
+
+        if not re.fullmatch(r"[a-z0-9\u4e00-\u9fa5]+(?:-[a-z0-9\u4e00-\u9fa5]+)*", page.slug):
+            slug_issues.append(page)
+            warnings.append(warning("P3", page.rel, eval_text(language, "unclean_slug"), "structure"))
+
+        expected_section = frontmatter_section(frontmatter.get("kind", ""), page.section)
+        if expected_section and expected_section != page.section:
+            misplaced.append(page)
+            warnings.append(
+                warning(
+                    "P3",
+                    page.rel,
+                    eval_text(language, "misplaced_page", expected=expected_section, actual=page.section),
+                    "structure",
+                )
+            )
+
+        if is_stale(page):
+            stale_pages.append(page)
+            warnings.append(
+                warning(
+                    "P2",
+                    page.rel,
+                    eval_text(language, "stale_page", updated=page.updated or eval_text(language, "unknown")),
+                    "freshness",
+                )
+            )
+
+        for link in page.links:
+            if link not in known:
+                broken.append({"from": page.slug, "to": link})
+                warnings.append(warning("P1", page.rel, eval_text(language, "broken_wikilink", link=link), "links"))
+            if link in inbound:
+                inbound[link] += 1
+
+        ledger_rows = extract_claim_ledger_rows(page.text)
+        if ledger_rows:
+            for row in ledger_rows:
+                claim_rows += 1
+                cells = row["cells"]
+                source = cells[1].strip() if len(cells) > 1 else ""
+                confidence = cells[2].strip() if len(cells) > 2 else ""
+                last_checked = cells[3].strip() if len(cells) > 3 else ""
+                if not source:
+                    missing_sources += 1
+                    warnings.append(
+                        warning("P1", page.rel, eval_text(language, "claim_missing_source", line=row["line"]), "evidence")
+                    )
+                elif not is_traceable_source(source):
+                    weak_sources += 1
+                    warnings.append(
+                        warning(
+                            "P2",
+                            page.rel,
+                            eval_text(language, "claim_weak_source", line=row["line"], source=source),
+                            "evidence",
+                        )
+                    )
+                if not confidence:
+                    missing_confidence += 1
+                    warnings.append(
+                        warning("P2", page.rel, eval_text(language, "claim_missing_confidence", line=row["line"]), "evidence")
+                    )
+                if not last_checked:
+                    missing_last_checked += 1
+                    warnings.append(
+                        warning("P2", page.rel, eval_text(language, "claim_missing_last_checked", line=row["line"]), "evidence")
+                    )
+        elif page_should_have_claim_ledger(page):
+            pages_without_ledger.append(page)
+            warnings.append(warning("P2", page.rel, eval_text(language, "missing_claim_ledger"), "evidence"))
+
+    orphan = [
+        slug
+        for slug, count in inbound.items()
+        if count == 0 and slug not in {"overview", "synthesis"} and (len(pages) > 1 or slug != pages[0].slug)
+    ]
+    for slug in orphan:
+        page = next((candidate for candidate in pages if candidate.slug == slug), None)
+        warnings.append(warning("P3", page.rel if page else slug, eval_text(language, "orphan_page", slug=slug), "links"))
+
+    overview = next((page for page in pages if page.slug == "overview"), None)
+    synthesis = next((page for page in pages if page.slug == "synthesis"), None)
+    coverage_warnings = 0
+    if overview and is_stub_page(overview):
+        coverage_warnings += 1
+        warnings.append(warning("P2", overview.rel, eval_text(language, "overview_stub"), "coverage"))
+    if synthesis and is_stub_page(synthesis):
+        coverage_warnings += 1
+        warnings.append(warning("P2", synthesis.rel, eval_text(language, "synthesis_stub"), "coverage"))
+    raw_captures = list((root / "raw" / "captures").glob("*.md")) if (root / "raw" / "captures").exists() else []
+    if raw_captures and not any(page.section == "summaries" for page in pages):
+        coverage_warnings += 1
+        warnings.append(warning("P2", "wiki/summaries/", eval_text(language, "captures_without_summaries"), "coverage"))
+
+    large_pages = [page for page in pages if len(page.text) > 20000]
+    for page in large_pages:
+        warnings.append(warning("P3", page.rel, eval_text(language, "large_page"), "maintainability"))
+
+    structure_score = clamp_score(100 - (len(missing_required) * 20 + len(missing_sections) * 15 + len(missing_frontmatter) * 8 + len(slug_issues) * 4 + len(misplaced) * 4))
+    link_score = clamp_score(100 - (len(broken) * 20 + len(orphan) * 5))
+    evidence_score = clamp_score(100 - (len(pages_without_ledger) * 12 + missing_sources * 15 + weak_sources * 8 + missing_confidence * 5 + missing_last_checked * 5))
+    coverage_score = clamp_score(100 - coverage_warnings * 20)
+    maintainability_score = clamp_score(100 - (len(stale_pages) * 10 + len(large_pages) * 5))
+    overall = round(
+        structure_score * 0.25
+        + link_score * 0.15
+        + evidence_score * 0.35
+        + coverage_score * 0.15
+        + maintainability_score * 0.10
+    )
+
+    return {
+        "evaluated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": local_timezone_name(),
+        "language": language,
+        "target": root,
+        "pages": len(pages),
+        "claim_rows": claim_rows,
+        "raw_captures": len(raw_captures),
+        "scores": {
+            "overall": overall,
+            "structure": structure_score,
+            "links": link_score,
+            "evidence": evidence_score,
+            "coverage": coverage_score,
+            "maintainability": maintainability_score,
+        },
+        "counts": {
+            "warnings": len(warnings),
+            "p1": count_severity(warnings, "P1"),
+            "p2": count_severity(warnings, "P2"),
+            "p3": count_severity(warnings, "P3"),
+            "broken_links": len(broken),
+            "orphan_pages": len(orphan),
+            "missing_frontmatter": len(missing_frontmatter),
+            "pages_without_claim_ledger": len(pages_without_ledger),
+            "claim_rows_missing_source": missing_sources,
+            "stale_pages": len(stale_pages),
+        },
+        "warnings": warnings,
+    }
+
+
+def detect_report_language(pages: list[Page]) -> str:
+    content_pages = [
+        page
+        for page in pages
+        if clean_quoted(parse_frontmatter(page.text).get("status", page.status)).lower() != "seed"
+    ]
+    sampled_pages = content_pages or pages
+    sample = "\n".join(f"{page.title}\n{page.summary}\n{page.text}" for page in sampled_pages)[:200000]
+    cjk = sum(1 for char in sample if "\u4e00" <= char <= "\u9fff")
+    latin = sum(1 for char in sample if ("a" <= char.lower() <= "z"))
+    return "zh-CN" if cjk >= 20 and cjk >= latin * 0.2 else "en"
+
+
+def eval_text(language: str, key: str, **values: object) -> str:
+    zh = {
+        "missing_required_file": "缺少必要的 wiki 文件。",
+        "missing_section": "缺少必要的 wiki 分区。",
+        "missing_frontmatter": "缺少 frontmatter 字段：{fields}。",
+        "unclean_slug": "文件名不是干净的小写 slug。",
+        "misplaced_page": "页面 kind 指向 `{expected}/`，但文件位于 `{actual}/`。",
+        "stale_page": "页面包含可能有时效性的表述；updated 为 {updated}。",
+        "unknown": "未知",
+        "broken_wikilink": "断开的 wikilink：[[{link}]]。",
+        "claim_missing_source": "Claim Ledger 第 {line} 行缺少 source。",
+        "claim_weak_source": "Claim Ledger 第 {line} 行的 source 不够清晰可追溯：{source}。",
+        "claim_missing_confidence": "Claim Ledger 第 {line} 行缺少 confidence。",
+        "claim_missing_last_checked": "Claim Ledger 第 {line} 行缺少 last checked 日期。",
+        "missing_claim_ledger": "事实性 wiki 页面缺少 Claim Ledger。",
+        "orphan_page": "孤立页面：[[{slug}]]。",
+        "overview_stub": "overview 仍像是占位页，内容偏短。",
+        "synthesis_stub": "synthesis 仍像是占位页，内容偏短。",
+        "captures_without_summaries": "已经有 captured sources，但没有发现 summary 页面。",
+        "large_page": "页面较大，agent 可能难以一次性完整审阅。",
+    }
+    en = {
+        "missing_required_file": "Required wiki file is missing.",
+        "missing_section": "Required wiki section is missing.",
+        "missing_frontmatter": "Missing frontmatter fields: {fields}.",
+        "unclean_slug": "Filename is not a clean lowercase slug.",
+        "misplaced_page": "Page kind suggests `{expected}/` but file is under `{actual}/`.",
+        "stale_page": "Time-sensitive language may be stale; updated {updated}.",
+        "unknown": "unknown",
+        "broken_wikilink": "Broken wikilink: [[{link}]].",
+        "claim_missing_source": "Claim Ledger row {line} is missing a source.",
+        "claim_weak_source": "Claim Ledger row {line} source is not clearly traceable: {source}.",
+        "claim_missing_confidence": "Claim Ledger row {line} is missing confidence.",
+        "claim_missing_last_checked": "Claim Ledger row {line} is missing last checked date.",
+        "missing_claim_ledger": "Factual wiki page has no Claim Ledger.",
+        "orphan_page": "Orphan page: [[{slug}]].",
+        "overview_stub": "Overview appears to be a stub.",
+        "synthesis_stub": "Synthesis appears to be a stub.",
+        "captures_without_summaries": "Captured sources exist but no summary pages were found.",
+        "large_page": "Page is large and may be difficult for agents to inspect in one pass.",
+    }
+    template = (zh if language == "zh-CN" else en)[key]
+    return template.format(**values)
+
+
+def warning(severity: str, file: str, message: str, category: str) -> dict[str, str]:
+    return {"severity": severity, "file": file, "message": message, "category": category}
+
+
+def clamp_score(value: int | float) -> int:
+    return max(0, min(100, round(value)))
+
+
+def count_severity(warnings: list[dict[str, str]], severity: str) -> int:
+    return sum(1 for item in warnings if item["severity"] == severity)
+
+
+def highest_severity(warnings: list[dict[str, str]]) -> str:
+    for severity in ["P1", "P2", "P3"]:
+        if count_severity(warnings, severity):
+            return severity
+    return "-"
+
+
+def local_timezone_name() -> str:
+    if time.daylight and time.localtime().tm_isdst > 0:
+        return time.tzname[1] or "local"
+    return time.tzname[0] or "local"
+
+
+def frontmatter_section(kind: str, fallback: str) -> str:
+    normalized = clean_quoted(kind).lower()
+    mapping = {
+        "summary": "summaries",
+        "summaries": "summaries",
+        "entity": "entities",
+        "entities": "entities",
+        "concept": "concepts",
+        "concepts": "concepts",
+        "comparison": "comparisons",
+        "comparisons": "comparisons",
+    }
+    return mapping.get(normalized, "" if fallback == "root" else fallback)
+
+
+def extract_claim_ledger_rows(text: str) -> list[dict[str, object]]:
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines) if re.match(r"^##+\s+Claim Ledger\s*$", line.strip(), re.IGNORECASE)), None)
+    if start is None:
+        return []
+    rows: list[dict[str, object]] = []
+    for index in range(start + 1, len(lines)):
+        line = lines[index].strip()
+        if line.startswith("##"):
+            break
+        if not line.startswith("|") or "---" in line:
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) >= 2 and cells[0].lower() == "claim" and cells[1].lower() == "source":
+            continue
+        if len(cells) >= 2 and any(cells):
+            rows.append({"line": index + 1, "cells": cells})
+    return rows
+
+
+def is_traceable_source(source: str) -> bool:
+    value = source.strip().strip("`")
+    return bool(
+        value.startswith("raw/")
+        or value.startswith("./raw/")
+        or value.startswith("wiki/")
+        or value.startswith(".cwiki/web-research/")
+        or value.startswith("./.cwiki/web-research/")
+        or value.startswith("http://")
+        or value.startswith("https://")
+    )
+
+
+def page_should_have_claim_ledger(page: Page) -> bool:
+    frontmatter = parse_frontmatter(page.text)
+    if clean_quoted(frontmatter.get("status", page.status)).lower() == "seed":
+        return False
+    if clean_quoted(frontmatter.get("sources", "")).strip() == "0":
+        return False
+    if page.slug == "overview":
+        return False
+    if page.section in {"summaries", "entities", "concepts", "comparisons"}:
+        return len(page.text.strip()) > 250
+    return page.slug == "synthesis" and len(page.text.strip()) > 250
+
+
+def is_stub_page(page: Page) -> bool:
+    body = re.sub(r"^---\n[\s\S]*?\n---\n?", "", page.text).strip()
+    body = re.sub(r"^#\s+.+$", "", body, flags=re.MULTILINE).strip()
+    return len(body) < 120 or "No summary yet" in body
+
+
+def render_wiki_eval_report(root: Path, result: dict[str, object]) -> str:
+    scores = result["scores"]
+    counts = result["counts"]
+    warnings = result["warnings"]
+    evaluated_at = result["evaluated_at"]
+    date = str(evaluated_at).split(" ")[0]
+    language = str(result.get("language", "en"))
+    warning_lines = render_eval_warnings(warnings, language)
+    next_steps = render_eval_next_steps(warnings, language)
+    if language == "zh-CN":
+        return f"""---
+title: Wiki 质量评估 - {evaluated_at}
+tags: [evaluation, wiki-quality]
+created: {evaluated_at}
+evaluated_at: {evaluated_at}
+evaluation_timezone: {result['timezone']}
+updated: {date}
+status: final
+mode: wiki
+llm_assisted: false
+report_language: zh-CN
+target: {root.as_posix()}
+answer_file:
+question:
+source_file:
+raw_capture:
+ingest_prompt:
+query_prompt:
+web_research_file:
+operation_log_entry:
+overall: {scores['overall']}
+---
+
+# Wiki 质量评估 - {evaluated_at}
+
+## 确定性评估
+
+总体：{scores['overall']}/100
+结构：{scores['structure']}/100
+链接：{scores['links']}/100
+证据：{scores['evidence']}/100
+覆盖度：{scores['coverage']}/100
+可维护性：{scores['maintainability']}/100
+
+## 范围
+
+- 目标：`{root.as_posix()}`
+- 评估时间：{evaluated_at}
+- 评估时区：{result['timezone']}
+- 页面数：{result['pages']}
+- 原始捕获数：{result['raw_captures']}
+- Claim Ledger 行数：{result['claim_rows']}
+
+## 计数
+
+- 警告总数：{counts['warnings']}
+- P1：{counts['p1']}
+- P2：{counts['p2']}
+- P3：{counts['p3']}
+- 断链数：{counts['broken_links']}
+- 孤立页面数：{counts['orphan_pages']}
+- 缺少 frontmatter 的页面数：{counts['missing_frontmatter']}
+- 缺少 Claim Ledger 的页面数：{counts['pages_without_claim_ledger']}
+- 缺少 source 的 Claim 行数：{counts['claim_rows_missing_source']}
+- 可能过期的页面数：{counts['stale_pages']}
+
+## 警告
+
+{warning_lines}
+
+## 建议下一步
+
+{next_steps}
+
+## 说明
+
+- 本报告是确定性评估报告，未使用 LLM。
+- 它检查本地结构、链接、证据卫生、覆盖信号和可维护性信号。
+- 它不会在未读取原始来源正文的情况下断言事实真伪。
+"""
+    return f"""---
+title: Wiki Evaluation - {evaluated_at}
+tags: [evaluation, wiki-quality]
+created: {evaluated_at}
+evaluated_at: {evaluated_at}
+evaluation_timezone: {result['timezone']}
+updated: {date}
+status: final
+mode: wiki
+llm_assisted: false
+report_language: en
+target: {root.as_posix()}
+answer_file:
+question:
+source_file:
+raw_capture:
+ingest_prompt:
+query_prompt:
+web_research_file:
+operation_log_entry:
+overall: {scores['overall']}
+---
+
+# Wiki Evaluation - {evaluated_at}
+
+## Deterministic Evaluation
+
+Overall: {scores['overall']}/100
+Structure: {scores['structure']}/100
+Links: {scores['links']}/100
+Evidence: {scores['evidence']}/100
+Coverage: {scores['coverage']}/100
+Maintainability: {scores['maintainability']}/100
+
+## Scope
+
+- Target: `{root.as_posix()}`
+- Evaluated at: {evaluated_at}
+- Evaluation timezone: {result['timezone']}
+- Pages: {result['pages']}
+- Raw captures: {result['raw_captures']}
+- Claim Ledger rows: {result['claim_rows']}
+
+## Counts
+
+- Warnings: {counts['warnings']}
+- P1: {counts['p1']}
+- P2: {counts['p2']}
+- P3: {counts['p3']}
+- Broken links: {counts['broken_links']}
+- Orphan pages: {counts['orphan_pages']}
+- Missing frontmatter pages: {counts['missing_frontmatter']}
+- Pages without Claim Ledger: {counts['pages_without_claim_ledger']}
+- Claim rows missing source: {counts['claim_rows_missing_source']}
+- Stale pages: {counts['stale_pages']}
+
+## Warnings
+
+{warning_lines}
+
+## Suggested Next Steps
+
+{next_steps}
+
+## Notes
+
+- This report is deterministic and does not use an LLM.
+- It checks local structure, links, evidence hygiene, coverage signals, and maintainability signals.
+- It does not prove factual truth against original sources.
+"""
+
+
+def render_eval_warnings(warnings: list[dict[str, str]], language: str) -> str:
+    if not warnings:
+        return "- 暂无警告。" if language == "zh-CN" else "- No warnings."
+    return "\n".join(
+        f"- [{item['severity']}] `{item['file']}` ({eval_category_label(item['category'], language)}): {item['message']}"
+        for item in warnings
+    )
+
+
+def render_eval_next_steps(warnings: list[dict[str, str]], language: str) -> str:
+    if not warnings:
+        return "- 暂无需要立刻修复的问题。" if language == "zh-CN" else "- No immediate fixes suggested."
+    steps: list[str] = []
+    categories = {item["category"] for item in warnings}
+    if language == "zh-CN":
+        if "evidence" in categories:
+            steps.append("- 修复缺少来源或来源不够清晰的 Claim Ledger 行。")
+        if "links" in categories:
+            steps.append("- 修复断开的 wikilink，并检查孤立页面。")
+        if "structure" in categories:
+            steps.append("- 修复结构类 warning，例如缺失文件、frontmatter、slug 或页面分区问题。")
+        if "coverage" in categories:
+            steps.append("- 扩写 overview、synthesis，或为 captured sources 补充 summary 页面。")
+        if "freshness" in categories:
+            steps.append("- 在用于回答当前问题前复查可能过期的页面。")
+        if "maintainability" in categories:
+            steps.append("- 拆分或总结过大的页面，方便后续 agent 审阅。")
+        return "\n".join(steps[:5])
+    if "evidence" in categories:
+        steps.append("- Fix Claim Ledger rows with missing or weak source metadata.")
+    if "links" in categories:
+        steps.append("- Fix broken wikilinks and review orphan pages.")
+    if "structure" in categories:
+        steps.append("- Fix structure warnings such as missing files, frontmatter, slugs, or page placement.")
+    if "coverage" in categories:
+        steps.append("- Expand overview, synthesis, or summary pages for captured sources.")
+    if "freshness" in categories:
+        steps.append("- Review stale pages before relying on them for current questions.")
+    if "maintainability" in categories:
+        steps.append("- Split or summarize pages that are too large for easy agent review.")
+    return "\n".join(steps[:5])
+
+
+def eval_category_label(category: str, language: str) -> str:
+    if language != "zh-CN":
+        return category
+    return {
+        "structure": "结构",
+        "links": "链接",
+        "evidence": "证据",
+        "coverage": "覆盖度",
+        "freshness": "时效性",
+        "maintainability": "可维护性",
+    }.get(category, category)
+
+
+def default_eval_report_path(root: Path, prefix: str) -> Path:
+    return root / ".cwiki" / "eval" / f"{prefix}-{timestamp()}.md"
+
+
+def display_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def update_eval_index(root: Path, report_file: Path, result: dict[str, object]) -> None:
+    eval_dir = root / ".cwiki" / "eval"
+    ensure_dir(eval_dir)
+    index_file = eval_dir / "index.md"
+    if not index_file.exists():
+        index_file.write_text(
+            "# Evaluation Index\n\n| Evaluated At | Mode | Subject | Report | Overall | Highest Severity |\n|---|---|---|---|---:|---|\n",
+            encoding="utf-8",
+        )
+    rel_report = report_file.relative_to(eval_dir).as_posix() if report_file.is_relative_to(eval_dir) else report_file.as_posix()
+    scores = result["scores"]
+    severity = highest_severity(result["warnings"])
+    row = f"| {result['evaluated_at']} | wiki | `{Path(result['target']).as_posix()}` | `{rel_report}` | {scores['overall']} | {severity} |\n"
+    with index_file.open("a", encoding="utf-8") as handle:
+        handle.write(row)
 
 
 def search_wiki(target: str, query: str) -> None:
@@ -1812,10 +2466,22 @@ Follow `WIKI_SCHEMA.md`:
 1. Read `wiki/index.md`.
 2. Preserve the source language. If the source is Chinese, write Chinese wiki pages; if it is English, write English wiki pages. Do not translate by default.
 3. Identify existing summaries, entities, concepts, comparisons, overview, or synthesis pages to update.
-4. Extract source-backed claims into claim ledgers.
-5. Add bidirectional wikilinks where appropriate.
-6. Run `cwiki index .`.
-7. Append to `wiki/log.md`.
+4. Check `wiki/overview.md` and `wiki/synthesis.md`:
+   - If either page still has `status: seed`, replace seed guidance with real content when this source gives enough evidence.
+   - Update `overview.md` when the source changes the wiki map, scope, entry links, or navigation path.
+   - Update `synthesis.md` when the source supports a cross-page thesis, stable claim, contradiction, or decision-ready conclusion.
+   - If neither page should change, explicitly say why in your final note.
+5. Extract source-backed claims into claim ledgers.
+6. Add bidirectional wikilinks where appropriate.
+7. Run `cwiki index .`.
+8. Append to `wiki/log.md`.
+
+Final note must include:
+
+- Pages created
+- Pages updated
+- Whether `wiki/overview.md` changed, and why
+- Whether `wiki/synthesis.md` changed, and why
 """,
         encoding="utf-8",
     )
@@ -1835,6 +2501,7 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki ask . "What does this wiki know about retrieval?"
   cwiki web-ask . "What changed recently about this topic?" --wiki-weight 0.6 --web-weight 0.4
   cwiki answer . "What does this wiki know about retrieval?" --provider glm --model glm-4.6v
+  cwiki eval .
   cwiki search . "retrieval"
   cwiki lint .
 """,
@@ -1850,6 +2517,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint_parser = subparsers.add_parser("lint", help="Check wiki health")
     lint_parser.add_argument("dir")
+
+    eval_parser = subparsers.add_parser("eval", help="Evaluate wiki quality")
+    eval_parser.add_argument("dir")
+    eval_parser.add_argument("--output")
+    eval_parser.add_argument("--no-write", action="store_true")
 
     search_parser = subparsers.add_parser("search", help="Search wiki pages")
     search_parser.add_argument("dir")
@@ -1906,6 +2578,8 @@ def main(argv: list[str] | None = None) -> int:
             index_wiki(args.dir)
         elif args.command == "lint":
             return lint_wiki(args.dir)
+        elif args.command == "eval":
+            eval_wiki(args.dir, args.output, args.no_write)
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":

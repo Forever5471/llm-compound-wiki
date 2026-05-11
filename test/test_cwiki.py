@@ -43,6 +43,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
+            self.assertIn(".cwiki/eval/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -57,6 +58,16 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("CWIKI_PROVIDER=glm", env_example)
             self.assertIn("OPENAI_API_KEY=replace-with-your-local-key", env_example)
             self.assertIn("CWIKI_WEB_WIKI_WEIGHT=0.6", env_example)
+            overview = (root / "wiki" / "overview.md").read_text(encoding="utf-8")
+            self.assertIn("Entry Decision", overview)
+            self.assertIn("Current Map", overview)
+            self.assertIn("[[synthesis]]", overview)
+            self.assertIn("status: seed", overview)
+            synthesis = (root / "wiki" / "synthesis.md").read_text(encoding="utf-8")
+            self.assertIn("Current Thesis", synthesis)
+            self.assertIn("Stable Claims", synthesis)
+            self.assertIn("[[overview]]", synthesis)
+            self.assertIn("status: seed", synthesis)
             claude = (root / "CLAUDE.md").read_text()
             self.assertIn("Domain: Test knowledge", claude)
             self.assertIn("The human owns `raw/`; the LLM owns `wiki/`", claude)
@@ -145,6 +156,102 @@ Links to [[missing-page]].
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Broken links: 1", result.stdout)
 
+    def test_eval_reports_wiki_quality_and_writes_traceable_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis. This page contains enough explanatory detail to require an
+evidence ledger in deterministic wiki evaluation, because the project needs factual claims to stay traceable.
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. |  | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval", str(root))
+            self.assertIn("# Wiki Evaluation", result.stdout)
+            self.assertIn("## Deterministic Evaluation", result.stdout)
+            self.assertIn("Evidence:", result.stdout)
+            self.assertIn("Saved evaluation report: .cwiki/eval/wiki-eval-", result.stdout)
+
+            reports = list((root / ".cwiki" / "eval").glob("wiki-eval-*.md"))
+            self.assertEqual(len(reports), 1)
+            report = reports[0].read_text(encoding="utf-8")
+            self.assertIn("mode: wiki", report)
+            self.assertIn("llm_assisted: false", report)
+            self.assertIn("evaluated_at:", report)
+            self.assertIn("Claim Ledger row", report)
+            self.assertIn("[P1]", report)
+
+            index = (root / ".cwiki" / "eval" / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| wiki |", index)
+            self.assertIn(reports[0].name, index)
+
+    def test_eval_no_write_does_not_create_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Eval no write test")
+
+            result = run_cwiki("eval", str(root), "--no-write")
+            self.assertIn("# Wiki Evaluation", result.stdout)
+            self.assertNotIn("Saved evaluation report:", result.stdout)
+            self.assertNotIn("Overview appears to be a stub", result.stdout)
+            self.assertNotIn("Synthesis appears to be a stub", result.stdout)
+            self.assertNotIn("Factual wiki page has no Claim Ledger", result.stdout)
+            self.assertFalse((root / ".cwiki" / "eval").exists())
+
+    def test_eval_uses_chinese_report_for_chinese_wiki_and_accepts_web_research_sources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "中文评估测试")
+            (root / "wiki" / "concepts" / "检索.md").write_text(
+                """---
+title: 检索
+kind: concept
+tags: [搜索, 证据]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# 检索
+
+检索是在生成答案前寻找相关证据的过程。它可以帮助 agent 把回答建立在已有 wiki 和外部研究记录之上，
+也能让后续维护者追踪某个结论来自哪里。
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| 检索是在生成答案前寻找相关证据的过程。 | .cwiki/web-research/web-research-retrieval.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval", str(root))
+            self.assertIn("# Wiki 质量评估", result.stdout)
+            self.assertIn("## 确定性评估", result.stdout)
+            self.assertIn("证据：", result.stdout)
+            self.assertIn("report_language: zh-CN", result.stdout)
+            self.assertNotIn("source is not clearly traceable", result.stdout)
+            self.assertNotIn("source 不够清晰可追溯", result.stdout)
+
     def test_lint_ignores_wikilinks_inside_code_spans(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
@@ -180,7 +287,12 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertTrue((root / "raw" / "captures").exists())
             prompt = root / ".cwiki" / "prompts" / f"ingest-{dt.date.today().isoformat()}-some-article.md"
             self.assertTrue(prompt.exists())
-            self.assertIn("Preserve the source language", prompt.read_text())
+            prompt_text = prompt.read_text()
+            self.assertIn("Preserve the source language", prompt_text)
+            self.assertIn("Check `wiki/overview.md` and `wiki/synthesis.md`", prompt_text)
+            self.assertIn("status: seed", prompt_text)
+            self.assertIn("Whether `wiki/overview.md` changed", prompt_text)
+            self.assertIn("Whether `wiki/synthesis.md` changed", prompt_text)
 
     def test_capture_extracts_docx_text(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:

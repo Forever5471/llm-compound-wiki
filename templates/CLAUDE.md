@@ -16,8 +16,8 @@ The wiki layer is a directory of LLM-generated markdown files:
 - entity pages
 - concept pages
 - comparisons
-- an overview
-- a synthesis
+- an overview map
+- a synthesis thesis
 
 The LLM creates pages, updates them when new sources arrive, maintains cross-references, and keeps the wiki consistent. The user reads it; the LLM writes it.
 
@@ -60,8 +60,8 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 ```text
 raw/              Human-owned immutable source material
 wiki/             LLM-owned compiled knowledge layer
-  overview.md     Durable map of the whole wiki
-  synthesis.md    Current integrated thesis across sources
+  overview.md     Durable map and early-stage entry point
+  synthesis.md    Source-backed cross-page thesis for mature knowledge
   summaries/      Source and topic summaries
   entities/       People, organizations, places, products, projects
   concepts/       Ideas, theories, methods, terms
@@ -83,6 +83,7 @@ wiki/             LLM-owned compiled knowledge layer
 - Keep contradictions visible until resolved.
 - Update `wiki/index.md` after every ingest or saved analysis.
 - Append to `wiki/log.md`; never rewrite historical log entries.
+- Treat `wiki/overview.md` and `wiki/synthesis.md` as two alternative first reading surfaces, not placeholders. Use `overview.md` when the wiki needs orientation and navigation; use `synthesis.md` when the wiki has enough source-backed evidence for an integrated thesis.
 
 ## Auto-Trigger Workflows
 
@@ -144,7 +145,7 @@ Action:
 2. Find inbound links to affected pages.
 3. Apply source-cited edits.
 4. Update `updated` frontmatter.
-5. Update `wiki/overview.md` or `wiki/synthesis.md` if the global picture changes.
+5. Update `wiki/overview.md` when the page map, entry links, or scope changes; update `wiki/synthesis.md` when the integrated thesis, stable claims, or contradictions change.
 6. Run `cwiki index .`.
 7. Append to `wiki/log.md`.
 

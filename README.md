@@ -168,6 +168,15 @@ wiki/
 └── log.md
 ```
 
+### Overview vs Synthesis
+
+New wikis include two non-placeholder first reading surfaces:
+
+- `wiki/overview.md` is the early-stage entry point. It maps the domain, important page clusters, navigation paths, and open map questions.
+- `wiki/synthesis.md` becomes the entry point when the wiki has enough source-backed material for an integrated thesis. It records stable claims, tensions, contradictions, and update triggers.
+
+Use one as the first screen depending on wiki maturity: start with `overview.md` while sources are sparse; start with `synthesis.md` when cross-page evidence supports a durable conclusion. Keep both pages short and useful, and avoid duplicating `wiki/index.md`.
+
 ### 5. Maintain and Search
 
 ```bash
@@ -207,6 +216,7 @@ cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
 cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
+cwiki eval <dir> [--output <file>] [--no-write]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 

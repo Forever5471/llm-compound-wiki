@@ -21,10 +21,12 @@ Ingest turns raw evidence into compiled wiki pages.
    - `wiki/concepts/` for ideas, theories, methods, terms
    - `wiki/comparisons/` for compare/contrast pages
    - `wiki/overview.md` and `wiki/synthesis.md` when the global map or thesis changes
-8. Put factual claims in the page's claim ledger with a source path or URL.
-9. Add `[[wikilinks]]` in both directions when pages clearly relate.
-10. Run `cwiki index .`.
-11. Append to `wiki/log.md`.
+   - Use `overview.md` for orientation, entry links, and scope; use `synthesis.md` for source-backed integrated conclusions.
+8. If `wiki/overview.md` or `wiki/synthesis.md` still has `status: seed`, replace seed guidance with real content when this source gives enough evidence. If there is not enough evidence, leave the seed page intact and explain why.
+9. Put factual claims in the page's claim ledger with a source path or URL.
+10. Add `[[wikilinks]]` in both directions when pages clearly relate.
+11. Run `cwiki index .`.
+12. Append to `wiki/log.md`.
 
 ## Required Output
 
