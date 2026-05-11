@@ -157,7 +157,9 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
-CLI 本身不会直接联网浏览。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
+当前实现里，CLI 本身不会直接联网浏览。复制到 `.claude/skills/` 和 `.agents/skills/` 的技能是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
+
+未来可以增加一个纯终端的 `web-answer` 流程，把 wiki 检索、实时 web search、配置的证据权重和 `.env` 里的模型 provider 串成一个命令；但当前还没有实现。
 
 具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
 
@@ -205,11 +207,11 @@ python3 ../bin/cwiki.py web-ask . "问题" --no-web
 
 ### CLI 配置与 Agent 会话模型
 
-`.env` 里的模型配置控制项目自身通过终端/CLI 执行的流程，例如 `cwiki answer`。它不会改变 Trae、Codex、Claude Code、Cursor 或其他 agent 平台当前聊天会话选用的模型。
+`.env` 里的模型配置控制项目自身通过终端/CLI 执行的流程，例如 `cwiki answer`。`cwiki answer` 会使用配置的 provider/model 和本地 wiki 检索，但不会执行实时联网搜索。它不会改变 Trae、Codex、Claude Code、Cursor 或其他 agent 平台当前聊天会话选用的模型。
 
 如果你让 agent 在初始化后的 wiki 文件夹中工作，最终文字通常由该 agent 当前启用的模型生成。agent 应先读取本地的 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`，优先使用 `.claude/skills/` 或 `.agents/skills/` 里的本地技能，并按这些本地流程完成 capture、ingest、query、update、lint 和 browser research。若本地技能不能覆盖本次任务，agent 可以再使用自己平台提供的工具或探索式实现，但仍应遵守 wiki schema 和来源引用规则。
 
-`.env` 里的 web 证据权重也不是 agent 内部隐藏的重排器。在 CLI 流程中，`cwiki web-ask` 会读取这些权重，并写入浏览器研究 prompt 和 fusion prompt；在 agent 流程中，agent 应按生成 prompt 里的权重或本地 wiki 指令，综合本地 wiki 证据和 web 证据。
+`.env` 里的 web 证据权重也不是 agent 内部隐藏的重排器。在 CLI 流程中，`cwiki web-ask` 会读取这些权重，并写入浏览器研究 prompt 和 fusion prompt；它不会自己执行浏览器研究。在 agent 流程中，agent 应按生成 prompt 里的权重或本地 wiki 指令，综合本地 wiki 证据和 web 证据。
 
 ## 页面规范
 
