@@ -202,6 +202,10 @@ cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
 cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
+cwiki eval <dir> [--output <file>] [--no-write] [--json]
+cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
+cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -210,6 +214,10 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 `ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
 
 这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。
+
+在 agent 平台里问答时，推荐使用混合式 query workflow：先用 `cwiki ask` 生成可复现的 evidence prompt 和 brief；agent 先读取这些产物和其中列出的 wiki 页面；如果 prompt 上下文不足，再主动搜索 wiki、读取相邻高价值页面，并沿相关 `[[wikilink]]` 追一层。最终回答仍应遵守项目协议：包含 `## Evidence Used`、`## Answer`、`## Gaps`，用 `[[slug]]` 引用 wiki 页面，并在事实附近保留 source path 或 URL。需要实时网络证据时，应切到 `cwiki web-ask` 和 `wiki-agent-browser`，而不是依赖模型记忆。
+
+完整问答流程见 [docs/answering-workflow.zh-CN.md](docs/answering-workflow.zh-CN.md)。
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
@@ -220,6 +228,12 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
 
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
+
+`eval`、`eval-answer` 和 `eval-all` 会把质量报告写入 `.cwiki/eval/`。报告始终包含确定性本地检查和更细的质量信号。`eval-all` 默认扫描 `.cwiki/answers/` 并使用最新的 `answer-*.md` 生成综合报告；用 `--answer` 可以指定某个答案，用 `--wiki-only` 可以只评估 wiki。加 `--json` 时会输出适合 CI 或 agent 消费的结构化结果。
+
+当希望 CLI 自己调用 `.env` 里配置的模型时，可以加 `--llm` 附加 LLM-assisted evaluation。报告会写清楚本次辅助评估使用的 provider、model、状态和时间；如果没有配置 API key，确定性评估仍会完成，LLM 部分标记为 `skipped`。
+
+如果这个 wiki 正在 Trae、Codex、Claude Code、Cursor 等 agent 平台中使用，LLM-assisted interpretation 应使用该平台当前会话的模型，而不是项目 `.env` 中配置的模型。此时建议正常运行确定性 eval 命令，再由 agent 用当前模型补充或总结 LLM-assisted evaluation，并在报告中标注 `provider: agent-platform`、`model: current agent model` 或平台可见的模型名称。`cwiki eval-schedule . --every-days 7 --llm` 适合终端/CLI 模型评估；如果是 agent 平台周期任务，应让平台 automation 先运行确定性 eval，再用当前 agent 模型完成辅助评估。
 
 ## 模型配置
 
@@ -267,6 +281,8 @@ python3 ../bin/cwiki.py web-ask . "问题" --no-web
 
 如果你让 agent 在初始化后的 wiki 文件夹中工作，最终文字通常由该 agent 当前启用的模型生成。agent 应先读取本地的 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`，优先使用 `.claude/skills/` 或 `.agents/skills/` 里的本地技能，并按这些本地流程完成 capture、ingest、query、update、lint 和 browser research。若本地技能不能覆盖本次任务，agent 可以再使用自己平台提供的工具或探索式实现，但仍应遵守 wiki schema 和来源引用规则。
 
+在 agent 平台内回答 wiki 问题时，推荐路径是混合式：`cwiki ask` 负责生成稳定的 prompt 和 evidence brief，agent 再用当前会话模型回答；只有当 prompt 上下文不足时，才额外读取更多 wiki 页面。这样既保留可复现性，也避免 agent 被一次召回不足的 context pack 限死。
+
 `.env` 里的 web 证据权重也不是 agent 内部隐藏的重排器。在 CLI 流程中，`cwiki web-ask` 会读取这些权重，并写入浏览器研究 prompt 和 fusion prompt；它不会自己执行浏览器研究。在 agent 流程中，agent 应按生成 prompt 里的权重或本地 wiki 指令，综合本地 wiki 证据和 web 证据。
 
 ## 页面规范
@@ -306,8 +322,9 @@ status: active
 2. `raw/` 只读，作为证据层保存。
 3. 按类型写入 `wiki/summaries/`、`wiki/entities/`、`wiki/concepts/`、`wiki/comparisons/`，并维护 `overview.md` 和 `synthesis.md`。
 4. 事实声明必须有来源路径或 URL。
-5. ingest 或保存分析后运行 `cwiki index .`。
-6. 每隔几次 ingest 运行 `cwiki lint .`，处理断链、孤页和过期声明。
+5. 每次 ingest 或 update 后都刷新 `wiki/overview.md` 和 `wiki/synthesis.md`，避免全局地图和综合结论停留在占位状态。
+6. ingest 或保存分析后运行 `cwiki index .`。
+7. 每隔几次 ingest 运行 `cwiki lint .`，处理断链、孤页和过期声明。
 
 初始化后的 wiki 会同时生成 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议。
 

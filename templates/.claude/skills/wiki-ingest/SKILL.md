@@ -20,11 +20,16 @@ Ingest turns raw evidence into compiled wiki pages.
    - `wiki/entities/` for people, organizations, projects, products, places
    - `wiki/concepts/` for ideas, theories, methods, terms
    - `wiki/comparisons/` for compare/contrast pages
-   - `wiki/overview.md` and `wiki/synthesis.md` when the global map or thesis changes
-8. Put factual claims in the page's claim ledger with a source path or URL.
-9. Add `[[wikilinks]]` in both directions when pages clearly relate.
-10. Run `cwiki index .`.
-11. Append to `wiki/log.md`.
+8. Mandatory global pages refresh:
+   - Open both `wiki/overview.md` and `wiki/synthesis.md` on every ingest.
+   - Update `overview.md` every time with the current map: scope, important page clusters, new or changed entry links, and open navigation questions.
+   - Update `synthesis.md` every time with the current integrated thesis state: promoted stable claims, contradictions, evidence inventory, or a clear note that no thesis is promoted yet and why.
+   - If either page still has `status: seed`, replace seed guidance with real wiki-specific content. Do not leave generic placeholder prose after the first real ingest.
+   - Preserve source language for these pages where practical; if the wiki is mixed-language, prefer the dominant wiki language and keep titles/links exact.
+9. Put factual claims in the page's claim ledger with a source path or URL.
+10. Add `[[wikilinks]]` in both directions when pages clearly relate.
+11. Run `cwiki index .`.
+12. Append to `wiki/log.md`.
 
 ## Required Output
 
@@ -33,7 +38,8 @@ Tell the user:
 - source processed
 - pages created
 - pages updated
-- whether `overview.md` or `synthesis.md` changed
+- what changed in `wiki/overview.md`
+- what changed in `wiki/synthesis.md`
 - important contradictions or uncertainty
 - any follow-up sources worth adding
 

@@ -16,8 +16,8 @@ The wiki layer is a directory of LLM-generated markdown files:
 - entity pages
 - concept pages
 - comparisons
-- an overview
-- a synthesis
+- an overview map
+- a synthesis thesis
 
 The LLM creates pages, updates them when new sources arrive, maintains cross-references, and keeps the wiki consistent. The user reads it; the LLM writes it.
 
@@ -40,6 +40,19 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 - `answer` calls the `.env` configured provider/model against local wiki retrieval, but it does not perform live web search.
 - Live web research requires a browser-capable agent following `wiki-agent-browser`.
 
+## Hybrid Agent Query Workflow
+
+Use this when answering inside an agent platform such as Codex, Trae, Claude Code, Cursor, or OpenCode.
+
+1. Prefer the standard path first: run `cwiki ask . "<question>"` when no suitable query prompt exists.
+2. Read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`; treat the prompt as the reproducible evidence boundary.
+3. Read every relevant page listed in the prompt from disk, plus `wiki/index.md`.
+4. If the prompt context is incomplete, search or inspect additional high-signal wiki pages and follow one level of useful `[[wikilinks]]`.
+5. If the question needs current web evidence, use `cwiki web-ask . "<question>"` and `wiki-agent-browser`; do not invent current facts from memory.
+6. Final prose comes from the current agent model, not `.env`, unless the user explicitly asks for `cwiki answer`.
+7. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`; cite `[[slug]]` pages and source paths or URLs near factual claims.
+8. In `## Evidence Used`, mark prompt-listed pages as `used` or `not used - reason`, and list any extra pages or web sources discovered during hybrid exploration.
+
 ## Local Configuration
 
 - `.env.example` is the template for local model and web-search defaults.
@@ -51,7 +64,9 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
+- For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Run deterministic `cwiki eval`, `cwiki eval-answer`, or `cwiki eval-all` first, then add or summarize the LLM-assisted section with `provider: agent-platform` and the visible model name when available.
 - Prefer this folder's local instructions and skills before platform-specific skills: read `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, then use `.claude/skills/` or `.agents/skills/` for capture, ingest, query, update, lint, and browser research.
+- For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask` for a stable prompt and evidence brief, then let the agent inspect additional wiki pages only when the prompt is incomplete.
 - If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
 - If the user asks for web evidence, run `cwiki web-ask . "<question>"` when useful, read the generated prompts, perform browser research when enabled, and follow the configured weights during synthesis.
 
@@ -60,8 +75,8 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 ```text
 raw/              Human-owned immutable source material
 wiki/             LLM-owned compiled knowledge layer
-  overview.md     Durable map of the whole wiki
-  synthesis.md    Current integrated thesis across sources
+  overview.md     Durable map and early-stage entry point
+  synthesis.md    Source-backed cross-page thesis for mature knowledge
   summaries/      Source and topic summaries
   entities/       People, organizations, places, products, projects
   concepts/       Ideas, theories, methods, terms
@@ -83,6 +98,8 @@ wiki/             LLM-owned compiled knowledge layer
 - Keep contradictions visible until resolved.
 - Update `wiki/index.md` after every ingest or saved analysis.
 - Append to `wiki/log.md`; never rewrite historical log entries.
+- Treat `wiki/overview.md` and `wiki/synthesis.md` as two alternative first reading surfaces, not placeholders. Use `overview.md` when the wiki needs orientation and navigation; use `synthesis.md` when the wiki has enough source-backed evidence for an integrated thesis.
+- Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update. Do not leave generic seed prose once the wiki contains real ingested knowledge.
 
 ## Auto-Trigger Workflows
 
@@ -99,10 +116,12 @@ Action:
 3. Preserve the source language for generated wiki content unless the user explicitly asks for translation.
 4. Identify affected summaries, entities, concepts, comparisons, overview, and synthesis.
 5. Create or update pages under the correct `wiki/` section.
-6. Add source-backed claim ledger rows.
-7. Add bidirectional wikilinks where useful.
-8. Run `cwiki index .`.
-9. Append to `wiki/log.md`.
+6. Refresh `wiki/overview.md` with the current map, entry links, and open navigation questions.
+7. Refresh `wiki/synthesis.md` with stable claims, contradictions, evidence inventory, or why no thesis is promoted yet.
+8. Add source-backed claim ledger rows.
+9. Add bidirectional wikilinks where useful.
+10. Run `cwiki index .`.
+11. Append to `wiki/log.md`.
 
 ### Query
 
@@ -110,12 +129,13 @@ Trigger when the user asks a question about wiki knowledge.
 
 Action:
 
-1. Read `wiki/index.md` first.
-2. Read relevant wiki pages in full.
-3. Follow one level of relevant wikilinks.
-4. Answer with local citations like `[[topic]]` and source paths or URLs.
-5. State gaps explicitly.
-6. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+1. Prefer `wiki-query`: run `cwiki ask . "<question>"` if no suitable query prompt already exists.
+2. Read the generated query prompt and evidence brief.
+3. Read `wiki/index.md` and the relevant wiki pages in full.
+4. Follow one level of relevant wikilinks when the prompt context is incomplete.
+5. Answer with local citations like `[[topic]]` and source paths or URLs.
+6. State gaps explicitly, including any extra pages inspected or prompt-listed pages that were not useful.
+7. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 
 ### Agent Browser
 
@@ -144,9 +164,10 @@ Action:
 2. Find inbound links to affected pages.
 3. Apply source-cited edits.
 4. Update `updated` frontmatter.
-5. Update `wiki/overview.md` or `wiki/synthesis.md` if the global picture changes.
-6. Run `cwiki index .`.
-7. Append to `wiki/log.md`.
+5. Refresh `wiki/overview.md` with the current page map, entry links, scope, and open navigation questions.
+6. Refresh `wiki/synthesis.md` with the current thesis state, stable claims, contradictions, evidence inventory, or why no thesis is promoted yet.
+7. Run `cwiki index .`.
+8. Append to `wiki/log.md`.
 
 ### Lint
 

@@ -15,8 +15,8 @@ The human curates sources and sets direction. The agent reads sources, extracts 
 ```text
 raw/              Immutable source material
 wiki/
-  overview.md     High-level map of the whole wiki
-  synthesis.md    Current cross-source synthesis
+  overview.md     Durable map and early-stage entry point
+  synthesis.md    Source-backed cross-page thesis for mature knowledge
   summaries/      Source and topic summaries
   entities/       People, organizations, places, products, projects
   concepts/       Ideas, theories, methods, terms
@@ -35,8 +35,8 @@ wiki/
   - `wiki/entities/<slug>.md` for people, organizations, places, products, projects
   - `wiki/concepts/<slug>.md` for ideas, theories, methods, terms
   - `wiki/comparisons/<slug>.md` for compare/contrast pages
-  - `wiki/overview.md` for the durable map of the knowledge base
-  - `wiki/synthesis.md` for the current integrated thesis across sources
+  - `wiki/overview.md` for the durable map of the knowledge base and the default entry point while evidence is still sparse
+  - `wiki/synthesis.md` for the current integrated thesis across sources once there is enough source-backed material
 - Filenames are lowercase slugs: `retrieval-augmented-generation.md`.
 - Use Obsidian wikilinks: `[[retrieval-augmented-generation]]`.
 - Every generated wiki page must include YAML frontmatter:
@@ -89,6 +89,15 @@ What the wiki currently believes, in prose.
 - What should be investigated next?
 ```
 
+## Overview And Synthesis
+
+`overview.md` and `synthesis.md` are not placeholders. They are two alternative first reading surfaces:
+
+- Use `overview.md` as the first screen when the wiki is still accumulating sources. It should orient a reader or agent: scope, important pages, navigation paths, and open map questions.
+- Use `synthesis.md` as the first screen when the wiki has enough source-backed pages to support a durable integrated thesis. It should summarize what the wiki currently believes, what is stable, what is contested, and what evidence would change the conclusion.
+
+Keep both pages lightweight and useful. Do not duplicate `wiki/index.md`; link to the most important pages with short reasons. Every ingest or update must refresh both files: `overview.md` should reflect the current map and entry links, while `synthesis.md` should reflect the current thesis state, contradictions, evidence inventory, or why no thesis has been promoted yet.
+
 ## Ingest Workflow
 
 1. Read the source in full. For long documents, process section by section.
@@ -100,20 +109,27 @@ What the wiki currently believes, in prose.
    - `wiki/entities/` for durable entity pages
    - `wiki/concepts/` for reusable concepts
    - `wiki/comparisons/` when the source changes a comparison
-   - `wiki/overview.md` and `wiki/synthesis.md` when the global map or thesis changes
+   - `wiki/overview.md` and `wiki/synthesis.md` on every ingest as the mandatory global pages refresh
 6. Add source-backed rows to the claim ledger.
 7. Add links from new pages to existing pages and from existing pages back to new pages where appropriate.
-8. Run `cwiki index .`.
-9. Append to `wiki/log.md`.
+8. Before finishing, verify `wiki/overview.md` and `wiki/synthesis.md` no longer contain generic seed prose once real wiki knowledge exists.
+9. Run `cwiki index .`.
+10. Append to `wiki/log.md`.
 
 ## Query Workflow
 
-1. Read `wiki/index.md` first.
-2. Read relevant wiki pages in full across `summaries/`, `entities/`, `concepts/`, `comparisons/`, `overview.md`, and `synthesis.md`.
-3. Follow one level of relevant `[[wikilinks]]`.
-4. Answer using local page citations like `[[topic]]` and source paths or URLs.
-5. State gaps explicitly.
-6. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
+For agent-platform use, query should be hybrid: the generated prompt provides a stable evidence boundary, and the agent may inspect more wiki pages only when that boundary is incomplete.
+
+1. Run `cwiki ask . "<question>"` when no suitable query prompt exists.
+2. Read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`.
+3. Read `wiki/index.md` first.
+4. Read relevant wiki pages in full across `summaries/`, `entities/`, `concepts/`, `comparisons/`, `overview.md`, and `synthesis.md`.
+5. Follow one level of relevant `[[wikilinks]]` when the prompt context is insufficient.
+6. Answer using local page citations like `[[topic]]` and source paths or URLs.
+7. Use the sections `## Evidence Used`, `## Answer`, and `## Gaps`.
+8. In `## Evidence Used`, mark prompt-listed pages as used or not used, and list any extra pages discovered during hybrid exploration.
+9. State gaps explicitly.
+10. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
 
 ## Agent Browser Workflow
 
