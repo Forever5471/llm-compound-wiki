@@ -9,12 +9,15 @@ Do not answer from memory first. The compiled wiki is the working source of trut
 
 ## Steps
 
-1. Read `wiki/index.md`.
-2. Read relevant pages across `wiki/summaries/`, `wiki/entities/`, `wiki/concepts/`, `wiki/comparisons/`, `wiki/overview.md`, and `wiki/synthesis.md`.
-3. Follow one level of relevant `[[wikilinks]]`.
-4. If the wiki is insufficient, say what is missing and optionally use current web sources if the user requested or the claim is time-sensitive.
-5. Answer with local citations like `[[topic]]` and source paths or URLs.
-6. Offer to save substantial synthesis into the appropriate wiki location.
+1. Prefer the standard path first: run `cwiki ask . "<question>"` when no current query prompt exists, then read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`.
+2. Treat the generated query prompt as the reproducible evidence boundary. It tells you which pages were retrieved, which output shape to use, and how to report gaps.
+3. Read `wiki/index.md`.
+4. Read relevant pages across `wiki/summaries/`, `wiki/entities/`, `wiki/concepts/`, `wiki/comparisons/`, `wiki/overview.md`, and `wiki/synthesis.md`.
+5. If the generated prompt is incomplete, use the hybrid agent workflow: search the wiki again, inspect likely adjacent pages, and follow one level of relevant `[[wikilinks]]`.
+6. If the wiki is insufficient, say what is missing and optionally use current web sources if the user requested or the claim is time-sensitive.
+7. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`.
+8. Cite local pages like `[[topic]]` and keep source paths or URLs close to factual claims.
+9. Offer to save substantial synthesis into the appropriate wiki location.
 
 If the user accepts saving:
 

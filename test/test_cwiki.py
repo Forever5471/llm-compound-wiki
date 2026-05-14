@@ -1,7 +1,11 @@
 import datetime as dt
+import http.server
+import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -38,7 +42,7 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / "wiki" / "entities").exists())
             self.assertTrue((root / "wiki" / "concepts").exists())
             self.assertTrue((root / "wiki" / "comparisons").exists())
-            gitignore = (root / ".gitignore").read_text()
+            gitignore = (root / ".gitignore").read_text(encoding="utf-8")
             self.assertIn(".env", gitignore)
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
@@ -53,10 +57,11 @@ class CwikiTest(unittest.TestCase):
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-xlsx" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-agent-browser" / "SKILL.md").exists())
 
-            self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text())
-            env_example = (root / ".env.example").read_text()
+            self.assertIn("Domain: Test knowledge", (root / "WIKI_SCHEMA.md").read_text(encoding="utf-8"))
+            env_example = (root / ".env.example").read_text(encoding="utf-8")
             self.assertIn("CWIKI_PROVIDER=glm", env_example)
             self.assertIn("OPENAI_API_KEY=replace-with-your-local-key", env_example)
+            self.assertIn("CWIKI_EVAL_PROVIDER=glm", env_example)
             self.assertIn("CWIKI_WEB_WIKI_WEIGHT=0.6", env_example)
             overview = (root / "wiki" / "overview.md").read_text(encoding="utf-8")
             self.assertIn("Entry Decision", overview)
@@ -68,7 +73,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("Stable Claims", synthesis)
             self.assertIn("[[overview]]", synthesis)
             self.assertIn("status: seed", synthesis)
-            claude = (root / "CLAUDE.md").read_text()
+            claude = (root / "CLAUDE.md").read_text(encoding="utf-8")
             self.assertIn("Domain: Test knowledge", claude)
             self.assertIn("The human owns `raw/`; the LLM owns `wiki/`", claude)
             self.assertIn("The CLI is the scaffold and local utility layer", claude)
@@ -80,7 +85,9 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("use the current agent model for reasoning and final prose", claude)
             self.assertIn("Prefer this folder's local instructions and skills", claude)
             self.assertIn("If the local skills do not cover the task", claude)
-            agents = (root / "AGENTS.md").read_text()
+            self.assertIn("Hybrid Agent Query Workflow", claude)
+            self.assertIn("Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update", claude)
+            agents = (root / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("The CLI is the scaffold and local utility layer", agents)
             self.assertIn("ask` and `web-ask` prepare evidence and prompts", agents)
             self.assertIn("they do not change this agent platform's active chat model", agents)
@@ -90,6 +97,15 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("use the current agent model for reasoning and final prose", agents)
             self.assertIn("Prefer this folder's local instructions and skills", agents)
             self.assertIn("If the local skills do not cover the task", agents)
+            self.assertIn("Hybrid Agent Query Workflow", agents)
+            self.assertIn("Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update", agents)
+            ingest_skill = (root / ".claude" / "skills" / "wiki-ingest" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("Mandatory global pages refresh", ingest_skill)
+            self.assertIn("Open both `wiki/overview.md` and `wiki/synthesis.md` on every ingest", ingest_skill)
+            self.assertIn("Do not leave generic placeholder prose after the first real ingest", ingest_skill)
+            update_skill = (root / ".claude" / "skills" / "wiki-update" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("Mandatory global pages refresh", update_skill)
+            self.assertIn("Open both `wiki/overview.md` and `wiki/synthesis.md` on every update", update_skill)
 
     def test_index_lists_generated_wiki_sections(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -127,7 +143,7 @@ updated: 2026-05-08
             )
 
             run_cwiki("index", str(root))
-            index = (root / "wiki" / "index.md").read_text()
+            index = (root / "wiki" / "index.md").read_text(encoding="utf-8")
             self.assertIn("[[retrieval]]", index)
             self.assertIn("[[rag-vs-llm-wiki]]", index)
             self.assertIn("Concept Pages", index)
@@ -216,6 +232,497 @@ evidence ledger in deterministic wiki evaluation, because the project needs fact
             self.assertNotIn("Factual wiki page has no Claim Ledger", result.stdout)
             self.assertFalse((root / ".cwiki" / "eval").exists())
 
+    def test_eval_answer_reports_grounded_answer_quality(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Answer eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. | raw/captures/retrieval.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-good.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                """---
+title: Answer - Retrieval
+tags: [answer]
+sources: 1
+updated: 2026-05-10
+status: draft
+question: What does retrieval do?
+---
+
+# Answer - Retrieval
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Retrieval finds relevant evidence before synthesis, according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+The wiki does not yet compare retrieval strategies.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer))
+            self.assertIn("# Answer Evaluation", result.stdout)
+            self.assertIn("Risk: low", result.stdout)
+            self.assertIn("Saved evaluation report: .cwiki/eval/answer-eval-", result.stdout)
+
+            reports = list((root / ".cwiki" / "eval").glob("answer-eval-*.md"))
+            self.assertEqual(len(reports), 1)
+            report = reports[0].read_text(encoding="utf-8")
+            self.assertIn("mode: answer", report)
+            self.assertIn("llm_assisted: false", report)
+            self.assertIn("Grounding:", report)
+            self.assertIn("Source Use:", report)
+
+            index = (root / ".cwiki" / "eval" / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| answer |", index)
+            self.assertIn(reports[0].name, index)
+
+    def test_eval_json_outputs_parseable_structured_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Eval json test")
+
+            result = run_cwiki("eval", str(root), "--json")
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["deterministic"]["mode"], "wiki")
+            self.assertIn("overall", payload["deterministic"]["scores"])
+            self.assertIn("signals", payload["deterministic"])
+            self.assertIsNone(payload["llm_assisted"])
+            self.assertNotIn("Saved evaluation report:", result.stdout)
+            self.assertIn("Saved evaluation report: .cwiki/eval/wiki-eval-", result.stderr)
+            reports = list((root / ".cwiki" / "eval").glob("wiki-eval-*.json"))
+            self.assertEqual(len(reports), 1)
+
+    def test_eval_llm_assisted_skips_without_configured_key(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Eval llm test")
+
+            result = run_cwiki(
+                "eval",
+                str(root),
+                "--json",
+                "--no-write",
+                "--llm",
+                "--provider",
+                "glm",
+                "--model",
+                "test-eval-model",
+                "--api-key-env",
+                "CWIKI_TEST_MISSING_EVAL_KEY",
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["llm_assisted"]["status"], "skipped")
+            self.assertEqual(payload["llm_assisted"]["provider"], "glm")
+            self.assertEqual(payload["llm_assisted"]["model"], "test-eval-model")
+            self.assertIn("CWIKI_TEST_MISSING_EVAL_KEY", payload["llm_assisted"]["reason"])
+
+    def test_eval_schedule_writes_local_config_and_runs_when_due(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Eval schedule test")
+
+            result = run_cwiki(
+                "eval-schedule",
+                str(root),
+                "--every-days",
+                "3",
+                "--llm",
+                "--provider",
+                "glm",
+                "--model",
+                "test-eval-model",
+                "--api-key-env",
+                "CWIKI_TEST_MISSING_EVAL_KEY",
+            )
+            self.assertIn("Saved scheduled evaluation config", result.stdout)
+            config_file = root / ".cwiki" / "eval" / "schedule.json"
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+            self.assertEqual(config["every_days"], 3)
+            self.assertTrue(config["llm"])
+            self.assertEqual(config["model"], "test-eval-model")
+
+            result = run_cwiki("eval-schedule", str(root), "--run-if-due")
+            self.assertIn("Saved evaluation report: .cwiki/eval/combined-eval-", result.stdout)
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+            self.assertIsNotNone(config["last_run"])
+
+    def test_eval_all_combines_wiki_and_answer_quality(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Combined eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. | raw/captures/retrieval.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-good.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                """---
+title: Answer - Retrieval
+tags: [answer]
+sources: 1
+updated: 2026-05-10
+status: draft
+question: What does retrieval do?
+---
+
+# Answer - Retrieval
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Retrieval finds relevant evidence before synthesis, according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+The wiki does not yet compare retrieval strategies.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-all", str(root), "--answer", str(answer))
+            self.assertIn("# Combined Evaluation", result.stdout)
+            self.assertIn("Wiki Quality:", result.stdout)
+            self.assertIn("Answer Quality:", result.stdout)
+            self.assertIn("Saved evaluation report: .cwiki/eval/combined-eval-", result.stdout)
+
+            reports = list((root / ".cwiki" / "eval").glob("combined-eval-*.md"))
+            self.assertEqual(len(reports), 1)
+            report = reports[0].read_text(encoding="utf-8")
+            self.assertIn("mode: combined", report)
+            self.assertIn("llm_assisted: false", report)
+            self.assertIn("answer_file: .cwiki/answers/answer-good.md", report)
+            self.assertIn("### Wiki Quality Counts", report)
+            self.assertIn("- Broken links: 0", report)
+            self.assertIn("- Orphan pages:", report)
+            self.assertIn("- Missing frontmatter pages: 0", report)
+            self.assertIn("- Pages without Claim Ledger: 0", report)
+            self.assertIn("- Claim rows missing source: 0", report)
+            self.assertIn("- Stale pages: 0", report)
+            index = (root / ".cwiki" / "eval" / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| combined |", index)
+            self.assertIn(reports[0].name, index)
+
+    def test_eval_all_auto_selects_latest_answer_when_answer_is_omitted(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Combined latest eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. | raw/captures/retrieval.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            answers_dir = root / ".cwiki" / "answers"
+            answers_dir.mkdir(parents=True, exist_ok=True)
+            old_answer = answers_dir / "answer-2026-05-10-old.md"
+            latest_answer = answers_dir / "answer-2026-05-11-latest.md"
+            answer_body = """---
+title: Answer - Retrieval
+tags: [answer]
+sources: 1
+updated: 2026-05-10
+status: draft
+question: What does retrieval do?
+---
+
+# Answer - Retrieval
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Retrieval finds relevant evidence before synthesis, according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+The wiki does not yet compare retrieval strategies.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+"""
+            old_answer.write_text(answer_body, encoding="utf-8")
+            latest_answer.write_text(answer_body, encoding="utf-8")
+            os.utime(old_answer, (1_700_000_000, 1_700_000_000))
+            os.utime(latest_answer, (1_800_000_000, 1_800_000_000))
+
+            result = run_cwiki("eval-all", str(root), "--json", "--no-write")
+            payload = json.loads(result.stdout)
+            deterministic = payload["deterministic"]
+            self.assertEqual(deterministic["answer_selection"]["mode"], "latest")
+            self.assertEqual(deterministic["answer_selection"]["selected"], ".cwiki/answers/answer-2026-05-11-latest.md")
+            self.assertEqual(deterministic["answer_file"], latest_answer.as_posix())
+            self.assertIsNotNone(deterministic["scores"]["answer_quality"])
+
+    def test_eval_all_json_supports_wiki_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Combined eval json test")
+
+            result = run_cwiki("eval-all", str(root), "--json", "--no-write", "--wiki-only")
+            payload = json.loads(result.stdout)
+            deterministic = payload["deterministic"]
+            self.assertEqual(deterministic["mode"], "combined")
+            self.assertEqual(deterministic["answer_selection"]["mode"], "wiki_only")
+            self.assertIsNone(deterministic["answer"])
+            self.assertIsNone(deterministic["scores"]["answer_quality"])
+            self.assertEqual(deterministic["scores"]["overall"], deterministic["scores"]["wiki_quality"])
+            self.assertFalse((root / ".cwiki" / "eval").exists())
+
+    def test_eval_answer_counts_citations_in_answer_subsections(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Answer subsection eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+""",
+                encoding="utf-8",
+            )
+            answer = root / "answer-subsections.md"
+            answer.write_text(
+                """# Answer
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Short answer.
+
+## Details
+
+Retrieval finds evidence before synthesis according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+More comparison is needed.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("Wiki citations: 1", result.stdout)
+            self.assertIn("Used Relevant Pages: 1", result.stdout)
+            self.assertNotIn("Answer body does not use local wiki citations", result.stdout)
+
+    def test_eval_answer_accepts_explicitly_unused_relevant_pages(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Unused relevant eval test")
+            for slug in ["retrieval", "ranking"]:
+                (root / "wiki" / "concepts" / f"{slug}.md").write_text(
+                    f"""---
+title: {slug.title()}
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# {slug.title()}
+""",
+                    encoding="utf-8",
+                )
+            answer = root / "answer-unused.md"
+            answer.write_text(
+                """# Answer
+
+## Question
+
+What does retrieval do?
+
+## Evidence Used
+
+- [[retrieval]] - used - source: raw/captures/retrieval.md
+- [[ranking]] - not used - reason: ranking is adjacent but not needed for this answer.
+
+## Answer
+
+Retrieval finds evidence before synthesis according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+[[ranking]] was not used because the question did not ask about ranking.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+- [[ranking]] (5) `wiki/concepts/ranking.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("Explicitly Not Used Relevant Pages: 1", result.stdout)
+            self.assertNotIn("Some Relevant Pages are not used", result.stdout)
+
+    def test_eval_answer_flags_missing_grounding_and_bad_links(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Bad answer eval test")
+            answer = root / "answer-bad.md"
+            answer.write_text(
+                """# Bad Answer
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Retrieval definitely improves production accuracy by 42 percent across current deployments and should always be used for every system.
+
+This also cites a missing page [[missing-page]].
+
+## Relevant Pages
+
+- [[missing-page]] (5) `wiki/concepts/missing-page.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("# Answer Evaluation", result.stdout)
+            self.assertIn("Risk: high", result.stdout)
+            self.assertIn("Answer cites a missing wiki page", result.stdout)
+            self.assertIn("Fact-like paragraph", result.stdout)
+            self.assertIn("Answer does not state gaps", result.stdout)
+            self.assertFalse((root / ".cwiki" / "eval").exists())
+
+    def test_eval_answer_flags_truncated_answers(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Truncated answer eval test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+""",
+                encoding="utf-8",
+            )
+            answer = root / "answer-truncated.md"
+            answer.write_text(
+                """# Answer
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+## Evidence Used
+
+- [[retrieval]] - used - source: raw/captures/retrieval.md
+- [[ranking
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("Risk: high", result.stdout)
+            self.assertIn("Answer body is too short", result.stdout)
+            self.assertIn("unclosed wikilink", result.stdout)
+
     def test_eval_uses_chinese_report_for_chinese_wiki_and_accepts_web_research_sources(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
@@ -287,12 +794,13 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertTrue((root / "raw" / "captures").exists())
             prompt = root / ".cwiki" / "prompts" / f"ingest-{dt.date.today().isoformat()}-some-article.md"
             self.assertTrue(prompt.exists())
-            prompt_text = prompt.read_text()
+            prompt_text = prompt.read_text(encoding="utf-8")
             self.assertIn("Preserve the source language", prompt_text)
-            self.assertIn("Check `wiki/overview.md` and `wiki/synthesis.md`", prompt_text)
+            self.assertIn("Mandatory global pages refresh", prompt_text)
+            self.assertIn("Open both `wiki/overview.md` and `wiki/synthesis.md` on every ingest", prompt_text)
             self.assertIn("status: seed", prompt_text)
-            self.assertIn("Whether `wiki/overview.md` changed", prompt_text)
-            self.assertIn("Whether `wiki/synthesis.md` changed", prompt_text)
+            self.assertIn("What changed in `wiki/overview.md`", prompt_text)
+            self.assertIn("What changed in `wiki/synthesis.md`", prompt_text)
 
     def test_capture_extracts_docx_text(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -312,7 +820,7 @@ Inline code `[[not-a-real-link]]` should not count.
 
             run_cwiki("capture", str(root), str(docx), "--title", "DOCX 测试")
             raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-docx-测试.md"
-            raw = raw_file.read_text()
+            raw = raw_file.read_text(encoding="utf-8")
             self.assertIn("type: docx", raw)
             self.assertIn("中文 DOCX 摄入测试", raw)
 
@@ -331,7 +839,7 @@ Inline code `[[not-a-real-link]]` should not count.
 
             run_cwiki("capture", str(root), str(pptx), "--title", "PPTX 测试")
             raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-pptx-测试.md"
-            raw = raw_file.read_text()
+            raw = raw_file.read_text(encoding="utf-8")
             self.assertIn("type: pptx", raw)
             self.assertIn("## Slide 1", raw)
             self.assertIn("OpenClaw 介绍", raw)
@@ -361,7 +869,7 @@ Inline code `[[not-a-real-link]]` should not count.
 
             run_cwiki("capture", str(root), str(xlsx), "--title", "XLSX 测试")
             raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-xlsx-测试.md"
-            raw = raw_file.read_text()
+            raw = raw_file.read_text(encoding="utf-8")
             self.assertIn("type: xlsx", raw)
             self.assertIn("## Sheet 1", raw)
             self.assertIn("自愈成功率 | 0.8", raw)
@@ -375,7 +883,7 @@ Inline code `[[not-a-real-link]]` should not count.
 
             run_cwiki("capture", str(root), str(image), "--title", "图片测试")
             raw_file = root / "raw" / "captures" / f"{dt.date.today().isoformat()}-图片测试.md"
-            raw = raw_file.read_text()
+            raw = raw_file.read_text(encoding="utf-8")
             self.assertIn("type: image", raw)
             self.assertIn("wiki-parse-image", raw)
 
@@ -413,6 +921,12 @@ Retrieval finds relevant evidence before synthesis.
             brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(brief.exists())
+            prompt_text = prompt.read_text(encoding="utf-8")
+            self.assertIn("source paths or URLs", prompt_text)
+            self.assertIn("## Evidence Used", prompt_text)
+            self.assertIn("Always include a `## Gaps` section", prompt_text)
+            self.assertIn("not used - reason", prompt_text)
+            self.assertIn("hybrid agent workflow", prompt_text)
 
     def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -462,15 +976,15 @@ Retrieval finds relevant evidence before synthesis.
             self.assertTrue(fusion.exists())
             self.assertTrue(brief.exists())
             self.assertTrue(research.exists())
-            prompt_text = prompt.read_text()
+            prompt_text = prompt.read_text(encoding="utf-8")
             self.assertIn("wiki-agent-browser", prompt_text)
             self.assertIn("Search the web for up to 4 high-quality sources", prompt_text)
             self.assertIn("Do not cite search result snippets", prompt_text)
             self.assertIn("For every external factual claim, cite a URL", prompt_text)
             self.assertIn("Local wiki weight: 0.7", prompt_text)
             self.assertIn("Web search weight: 0.3", prompt_text)
-            self.assertIn("web_mode: enabled", research.read_text())
-            self.assertIn("Evidence Fusion Prompt", fusion.read_text())
+            self.assertIn("web_mode: enabled", research.read_text(encoding="utf-8"))
+            self.assertIn("Evidence Fusion Prompt", fusion.read_text(encoding="utf-8"))
 
     def test_web_ask_can_disable_web_research(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -488,9 +1002,9 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("web_mode=disabled", result.stdout)
             prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
             research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
-            self.assertIn("Web mode: disabled", prompt.read_text())
-            self.assertIn("Search the web for up to 0 high-quality sources", prompt.read_text())
-            self.assertIn("web_mode: disabled", research.read_text())
+            self.assertIn("Web mode: disabled", prompt.read_text(encoding="utf-8"))
+            self.assertIn("Search the web for up to 0 high-quality sources", prompt.read_text(encoding="utf-8"))
+            self.assertIn("web_mode: disabled", research.read_text(encoding="utf-8"))
 
     def test_web_ask_reads_defaults_from_env_file(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -512,7 +1026,7 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("Evidence weights: wiki=0.8, web=0.2, web_mode=disabled", result.stdout)
 
             prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-use-env-web-defaults.md"
-            text = prompt.read_text()
+            text = prompt.read_text(encoding="utf-8")
             self.assertIn("Local wiki weight: 0.8", text)
             self.assertIn("Web search weight: 0.2", text)
             self.assertIn("Web mode: disabled", text)
@@ -564,7 +1078,7 @@ gray_zone 是自愈链路里的模糊样本处理层。
             )
             run_cwiki("ask", str(root), "gray_zone是怎么设计的")
             brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-gray-zone是怎么设计的.md"
-            text = brief.read_text()
+            text = brief.read_text(encoding="utf-8")
             self.assertIn("## 问题", text)
             self.assertIn("## 简短结论", text)
             self.assertIn("## 关键声明", text)
@@ -671,6 +1185,87 @@ Retrieval finds relevant evidence before synthesis.
             brief = root / ".cwiki" / "briefs" / f"brief-{dt.date.today().isoformat()}-what-does-the-wiki-know-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(brief.exists())
+
+    def test_answer_warns_when_model_output_looks_truncated(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "## Evidence Used\n- [[retrieval]] - used - source: raw/captures/retrieval.md\n- [[ranking"
+                            }
+                        }
+                    ]
+                }
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_key = os.environ.get("CWIKI_TEST_GLM_KEY")
+        os.environ["CWIKI_TEST_GLM_KEY"] = "test-key"
+        try:
+            with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+                root = Path(tmp)
+                run_cwiki("init", str(root), "--domain", "Truncated answer health test")
+                (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                    """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds relevant evidence before synthesis.
+""",
+                    encoding="utf-8",
+                )
+
+                result = run_cwiki(
+                    "answer",
+                    str(root),
+                    "What does the wiki know about retrieval?",
+                    "--provider",
+                    "glm",
+                    "--api-key-env",
+                    "CWIKI_TEST_GLM_KEY",
+                    "--base-url",
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Saved answer:", result.stdout)
+                self.assertIn("Answer may be truncated; please retry.", result.stderr)
+                self.assertIn("Unclosed wikilink", result.stderr)
+                self.assertIn("Missing required `## Answer` section", result.stderr)
+                answers = list((root / ".cwiki" / "answers").glob("answer-*.md"))
+                self.assertEqual(len(answers), 1)
+                answer_text = answers[0].read_text(encoding="utf-8")
+                self.assertIn("status: suspicious", answer_text)
+                self.assertIn("answer_health: failed", answer_text)
+                self.assertIn("health_warnings:", answer_text)
+                self.assertIn("## Answer Health", answer_text)
+                self.assertIn("This answer may be truncated or malformed", answer_text)
+        finally:
+            if old_key is None:
+                os.environ.pop("CWIKI_TEST_GLM_KEY", None)
+            else:
+                os.environ["CWIKI_TEST_GLM_KEY"] = old_key
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

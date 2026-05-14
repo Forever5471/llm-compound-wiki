@@ -1,6 +1,6 @@
 # Evaluation 设计
 
-本文档描述 LLM Compound Wiki 的评价能力。第一阶段已经实现确定性的 wiki 质量评价，可通过 `cwiki eval <dir>` 使用；问答质量评价和综合评价仍是后续规划。
+本文档描述 LLM Compound Wiki 的评价能力。确定性的 wiki 质量评价已经通过 `cwiki eval <dir>` 实现，确定性的问答质量评价已经通过 `cwiki eval-answer <dir> <answer-file>` 实现；综合评价已经通过 `cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]` 实现。
 
 目标是让生成后的 wiki 在摄入后可审计，也让生成后的答案更容易从 grounding、来源使用和协议遵守情况上进行判断。
 
@@ -8,18 +8,20 @@
 
 评价能力必须始终先生成确定性的本地报告。第一版不依赖 LLM judge、embedding API、向量数据库或实时联网能力。
 
-当本地 `.env` 已配置模型 provider，或项目运行在有可用模型的 agent 平台中时，evaluation 可以额外包含一段 LLM 参与的评估结论。该部分必须明确标注为 LLM-assisted evaluation，同时仍然输出无 LLM 参与的确定性报告。
+当 CLI 独立运行且本地 `.env` 已配置模型 provider 时，evaluation 可以通过 `--llm` 额外包含一段 LLM 参与的评估结论。该部分必须明确标注为 LLM-assisted evaluation，同时仍然输出无 LLM 参与的确定性报告。
 
-如果没有配置大模型，也没有使用 agent 平台模型参与评估，则只输出确定性的结构化报告。
+当 wiki 正在 agent 平台中操作时，LLM-assisted assessment 应使用该平台当前 agent 模型，而不是项目 `.env` 里的模型配置。agent 应先运行确定性 evaluation，再用当前 agent 模型补充 LLM-assisted 部分，并在报告中把模型来源标为 `agent-platform`，同时尽量写出平台可见的模型名称。
+
+如果没有 CLI 模型配置，则仍输出确定性的结构化报告；当用户请求了 CLI `--llm` 时，将 LLM-assisted 部分标记为 `skipped`。
 
 只有当用户明确要求评估 wiki 质量、问答质量、grounding、来源使用或类似质量信号时，才应执行 evaluation。它不应在每次 ingest、ask、web-ask、answer、lint 或 index 后自动运行。
 
 命令状态：
 
 ```bash
-cwiki eval <dir>                              # 第一阶段已实现
-cwiki eval-answer <dir> <answer-file>          # 规划中
-cwiki eval-all <dir> [--answer <answer-file>]  # 规划中
+cwiki eval <dir>                              # 已实现
+cwiki eval-answer <dir> <answer-file>          # 已实现
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] # 已实现
 ```
 
 未来可选命令：
@@ -187,9 +189,9 @@ cwiki eval . --stale-days 30
 
 ## 问答质量评价
 
-`cwiki eval-answer <dir> <answer-file>` 应评价一个生成后的答案文件，通常来自 `.cwiki/answers/`，也可以是复制进来的 Markdown 答案。
+`cwiki eval-answer <dir> <answer-file>` 评价一个生成后的答案文件，通常来自 `.cwiki/answers/`，也可以是复制进来的 Markdown 答案。
 
-它不应试图证明每句话都是真的。第一版应检查答案是否 grounded、可追踪、并遵守 wiki 协议。
+它不应试图证明每句话都是真的。确定性实现会检查答案是否 grounded、可追踪、并遵守 wiki 协议。
 
 当用户要求评估答案质量、grounding、来源使用，或某个回答是否遵守 wiki/web evidence 协议时，应使用该模式。
 
@@ -285,9 +287,9 @@ Grounding 检查答案是否回到 wiki 证据。
 
 ## 综合质量评价
 
-`cwiki eval-all <dir> [--answer <answer-file>]` 应在用户明确要求整体质量评估时生成综合报告。
+`cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]` 应在用户明确要求整体质量评估时生成综合报告。
 
-它应包含 wiki 质量；如果提供了 answer 文件，也应包含问答质量。
+它应包含 wiki 质量。默认情况下，它会扫描 `.cwiki/answers/` 并选择最新的 `answer-*.md` 进行问答质量评估；如果提供 `--answer`，则评估指定 answer；如果提供 `--wiki-only` 或当前没有 answer 文件，则说明本次没有包含 answer，且不虚构问答质量分数。
 
 建议输出：
 
@@ -312,10 +314,7 @@ Priority fixes:
 2. Add Sources and Gaps sections to the answer.
 ```
 
-如果没有提供 answer 文件，综合评价应二选一：
-
-- 只评价 wiki 质量，并说明本次没有包含 answer；或
-- 当用户明确要求同时评估问答质量时，提示用户提供 answer 文件。
+如果没有找到 answer 文件，综合评价只评价 wiki 质量，并说明本次没有包含 answer。
 
 综合评分不应隐藏底层分类分数。报告中应始终分别展示 wiki 和 answer 的组成分数。
 
@@ -374,6 +373,16 @@ cwiki eval-answer . .cwiki/answers/answer-2026-05-11-example.md
 ```
 
 `.cwiki/eval/` 默认应和 prompts、answers、briefs、web research 一样被 git 忽略。只有当用户明确希望把某次评估结论沉淀为长期知识时，才应把重要报告内容复制或总结进 `wiki/`。
+
+Wiki 报告和综合报告都应暴露同一组核心 wiki 质量计数，这样即使总分较高，也能看出是否发生结构退化：
+
+- 警告总数、P1、P2、P3
+- 断链数
+- 孤立页面数
+- 缺少 frontmatter 的页面数
+- 缺少 Claim Ledger 的页面数
+- 缺少 source 的 Claim 行数
+- 可能过期的页面数
 
 报告 frontmatter 建议包含：
 
@@ -463,36 +472,33 @@ Scope: wiki quality and/or answer quality
 
 LLM-assisted 部分可以总结模式、排序风险、建议修复优先级。它不能删除确定性 warning，不能隐藏确定性低分，也不能声称自己完成了超出输入证据范围的事实验证。
 
-未来可选 JSON 输出：
+已实现 JSON 输出：
 
 ```bash
 cwiki eval . --json
 cwiki eval-answer . .cwiki/answers/answer.md --json
+cwiki eval-all . --json
+cwiki eval-all . --answer .cwiki/answers/answer.md --json
 ```
 
 JSON 结构：
 
 ```json
 {
-  "overall": 78,
-  "scores": {
-    "structure": 88,
-    "evidence": 70
+  "deterministic": {
+    "mode": "combined",
+    "scores": {
+      "overall": 82,
+      "wiki_quality": 78,
+      "answer_quality": 85
+    },
+    "warnings": []
   },
-  "warnings": [
-    {
-      "severity": "P1",
-      "file": "wiki/concepts/retrieval.md",
-      "message": "Claim Ledger row is missing a source."
-    }
-  ],
-  "suggested_next_steps": [
-    "Add source paths to unsourced claims."
-  ]
+  "llm_assisted": null
 }
 ```
 
-JSON 输出也应分离 deterministic 和 LLM-assisted 结果：
+未来 LLM-assisted 输出应保持相同的顶层分离：
 
 ```json
 {
@@ -699,7 +705,7 @@ Evaluation 报告默认属于 `.cwiki/eval/`。它们是审计工件，不是长
 
 ### Phase 1：确定性 Wiki 评价
 
-实现：
+已实现：
 
 ```bash
 cwiki eval <dir>
@@ -720,7 +726,7 @@ cwiki eval <dir>
 
 ### Phase 2：确定性答案评价
 
-实现：
+已实现：
 
 ```bash
 cwiki eval-answer <dir> <answer-file>
@@ -741,24 +747,27 @@ cwiki eval-answer <dir> <answer-file>
 
 ### Phase 3：综合评价报告
 
-实现：
+已实现：
 
 ```bash
-cwiki eval-all <dir> [--answer <answer-file>]
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]
 ```
 
 行为：
 
 - 运行 wiki evaluation。
-- 只有提供 `--answer` 时才运行 answer evaluation。
+- 如果提供 `--answer`，评估指定 answer；否则自动选择 `.cwiki/answers/` 下最新的 `answer-*.md`。
+- 只有提供 `--wiki-only` 或没有 answer 文件时，才跳过 answer evaluation。
 - 同时展示分类分数；当两者都可用时展示综合分数。
-- warning 按 wiki 和 answer 分组。
+- warning 保留到具体 wiki 文件或 answer 文件，方便追踪。
 
 不调用模型。
 
 ### Phase 4：可选 JSON 输出
 
-新增：
+已实现：
+
+参数：
 
 ```bash
 --json
@@ -780,11 +789,23 @@ cwiki eval-all . --answer answer.md --llm
 
 - 始终先运行确定性 evaluation。
 - 如果 `.env` 配置了模型，CLI 可以调用该模型生成 LLM-assisted 部分。
-- 如果运行在 agent 平台中，agent 可以用当前会话模型生成 LLM-assisted 部分。
-- 如果没有可用模型，只打印确定性输出，并说明 LLM-assisted evaluation 被跳过。
+- 如果运行在 agent 平台中，agent 应使用当前会话模型生成 LLM-assisted 部分，而不是调用项目 `.env` 配置的模型。
+- 如果没有 CLI 模型 key，保留确定性输出，并把 CLI LLM-assisted evaluation 标记为 `skipped`。
 - LLM 参与的部分必须明确标注。
+- 报告必须记录 provider、model、status 和 timestamp；agent 平台模式下 provider 可写为 `agent-platform`。
 - 默认只把确定性报告、被引用页面、答案正文和必要 snippets 交给 LLM，不默认传入整个 wiki。
 - LLM 输出应视为解释性建议，而不是事实真相来源。
+
+### Phase 6：周期综合评估
+
+已实现为本地 wiki 配置：
+
+```bash
+cwiki eval-schedule . --every-days 7 --llm
+cwiki eval-schedule . --run-if-due
+```
+
+配置存储在 `.cwiki/eval/schedule.json`。它本身不会创建操作系统定时器；用户可以用 cron、Windows 任务计划、CI 或 agent 平台 automation 定期调用 `--run-if-due`。如果是 agent 平台 automation，优先运行确定性 CLI eval，然后用平台当前模型写入或总结 LLM-assisted 部分；只有希望 CLI 调用本地 `.env` 模型时才使用 `--llm`。
 
 ## 开放问题
 

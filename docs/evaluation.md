@@ -1,6 +1,6 @@
 # Evaluation Design
 
-This document describes the evaluation layer for LLM Compound Wiki. Phase 1 is implemented for deterministic wiki-quality evaluation through `cwiki eval <dir>`; answer-quality and combined evaluation remain planned follow-up work.
+This document describes the evaluation layer for LLM Compound Wiki. Deterministic wiki-quality evaluation is implemented through `cwiki eval <dir>`, deterministic answer-quality evaluation is implemented through `cwiki eval-answer <dir> <answer-file>`, and combined evaluation is implemented through `cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]`.
 
 The goal is to make a generated wiki auditable after ingestion, and to make generated answers easier to judge for grounding, source use, and protocol compliance.
 
@@ -8,18 +8,21 @@ The goal is to make a generated wiki auditable after ingestion, and to make gene
 
 Evaluation should always start with a deterministic local report. It should not require an LLM judge, embedding API, vector database, or live web access.
 
-When a local `.env` model provider is configured, or when the project is being operated inside an agent platform with an active model, evaluation may include an additional LLM-assisted assessment. That LLM output must be clearly labeled as LLM-assisted evaluation, and the deterministic non-LLM report must still be printed.
+When the CLI is running on its own and a local `.env` model provider is configured, evaluation may include an additional LLM-assisted assessment via `--llm`. That LLM output must be clearly labeled as LLM-assisted evaluation, and the deterministic non-LLM report must still be printed. Reports must record the provider, model, status, and timestamp used for the LLM-assisted section.
 
-If no model is configured and no agent-platform model is being used for evaluation, output only the deterministic structured report.
+When the wiki is being operated inside an agent platform, the LLM-assisted assessment should use the platform's current agent model, not the project's `.env` model settings. The agent should run deterministic evaluation, then produce the LLM-assisted section itself and label the model source as `agent-platform` plus the visible model name when available.
+
+If no CLI model is configured, output the deterministic structured report and mark the CLI LLM-assisted section as `skipped` when `--llm` was requested.
 
 Evaluation should run only when the user explicitly asks to evaluate wiki quality, answer quality, grounding, source use, or similar quality signals. It should not run automatically after every ingest, ask, web-ask, answer, lint, or index command.
 
 Command status:
 
 ```bash
-cwiki eval <dir>                         # implemented in Phase 1
-cwiki eval-answer <dir> <answer-file>     # planned
-cwiki eval-all <dir> [--answer <answer-file>] # planned
+cwiki eval <dir>                              # implemented
+cwiki eval-answer <dir> <answer-file>          # implemented
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] # implemented
+cwiki eval-schedule <dir> --every-days N       # implemented
 ```
 
 Possible later commands:
@@ -187,9 +190,9 @@ Signals:
 
 ## Answer Quality Evaluation
 
-`cwiki eval-answer <dir> <answer-file>` should evaluate a generated answer artifact, usually from `.cwiki/answers/` or a copied Markdown answer.
+`cwiki eval-answer <dir> <answer-file>` evaluates a generated answer artifact, usually from `.cwiki/answers/` or a copied Markdown answer.
 
-It should not try to prove whether every statement is true. The first version should check whether the answer is grounded, traceable, and compliant with the wiki protocol.
+It does not try to prove whether every statement is true. The deterministic implementation checks whether the answer is grounded, traceable, and compliant with the wiki protocol.
 
 This mode is useful when the user asks to evaluate answer quality, grounding, source use, or whether a specific response followed wiki/web evidence protocol.
 
@@ -285,9 +288,9 @@ Examples:
 
 ## Combined Quality Evaluation
 
-`cwiki eval-all <dir> [--answer <answer-file>]` should generate a combined report when the user explicitly asks for an overall quality assessment.
+`cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]` should generate a combined report when the user explicitly asks for an overall quality assessment.
 
-It should include wiki quality and, when an answer file is provided, answer quality.
+It should include wiki quality. By default, it scans `.cwiki/answers/` and evaluates the latest `answer-*.md` when one exists. If `--answer` is provided, it evaluates that specific answer instead. If `--wiki-only` is provided or no answer exists, it states that no answer was included and avoids inventing an answer score.
 
 Suggested output:
 
@@ -312,10 +315,7 @@ Priority fixes:
 2. Add Sources and Gaps sections to the answer.
 ```
 
-If no answer file is provided, combined evaluation should either:
-
-- evaluate wiki quality only and state that no answer was included, or
-- ask the user for an answer file when the user clearly requested answer quality too.
+If no answer file is found, combined evaluation evaluates wiki quality only and states that no answer was included.
 
 Combined scoring should not hide the underlying category scores. It should always display the wiki and answer components separately.
 
@@ -374,6 +374,16 @@ Suggested paths:
 ```
 
 `.cwiki/eval/` should be ignored by git by default, like prompts, answers, briefs, and web research. Users can copy important reports into `wiki/` only when they intentionally want evaluation findings to become durable wiki knowledge.
+
+Wiki reports and combined reports should expose the same core wiki quality counters so regressions are visible even when the overall score is high:
+
+- total warnings, P1, P2, P3
+- broken links
+- orphan pages
+- missing frontmatter pages
+- pages without Claim Ledger
+- Claim Ledger rows missing source
+- potentially stale pages
 
 Report frontmatter should include:
 
@@ -463,36 +473,33 @@ Scope: wiki quality and/or answer quality
 
 The LLM-assisted section may summarize patterns, prioritize risks, and suggest remediation order. It should not remove deterministic warnings, hide low deterministic scores, or claim factual verification beyond the evidence provided to it.
 
-Possible future JSON output:
+Implemented JSON output:
 
 ```bash
 cwiki eval . --json
 cwiki eval-answer . .cwiki/answers/answer.md --json
+cwiki eval-all . --json
+cwiki eval-all . --answer .cwiki/answers/answer.md --json
 ```
 
 JSON shape:
 
 ```json
 {
-  "overall": 78,
-  "scores": {
-    "structure": 88,
-    "evidence": 70
+  "deterministic": {
+    "mode": "combined",
+    "scores": {
+      "overall": 82,
+      "wiki_quality": 78,
+      "answer_quality": 85
+    },
+    "warnings": []
   },
-  "warnings": [
-    {
-      "severity": "P1",
-      "file": "wiki/concepts/retrieval.md",
-      "message": "Claim Ledger row is missing a source."
-    }
-  ],
-  "suggested_next_steps": [
-    "Add source paths to unsourced claims."
-  ]
+  "llm_assisted": null
 }
 ```
 
-JSON output should also separate deterministic and LLM-assisted results:
+Future LLM-assisted output should keep the same top-level separation:
 
 ```json
 {
@@ -741,24 +748,25 @@ No model calls.
 
 ### Phase 3: Combined Evaluation Report
 
-Implement:
+Implemented:
 
 ```bash
-cwiki eval-all <dir> [--answer <answer-file>]
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only]
 ```
 
 Behavior:
 
 - Run wiki evaluation.
-- Run answer evaluation only when `--answer` is provided.
+- Run answer evaluation against `--answer` when provided; otherwise auto-select the latest `.cwiki/answers/answer-*.md` when available.
+- Skip answer evaluation only when `--wiki-only` is provided or no answer exists.
 - Print separate category scores plus a combined score when both are available.
-- Keep warnings grouped by wiki and answer.
+- Keep warnings traceable to wiki files or answer files.
 
 No model calls.
 
 ### Phase 4: Optional JSON Output
 
-Add:
+Implemented:
 
 ```bash
 --json
@@ -768,7 +776,7 @@ This enables CI and agent automation.
 
 ### Phase 5: LLM-Assisted Assessment
 
-Only after deterministic evaluation is stable, add an optional LLM-assisted assessment path.
+Implemented as an optional LLM-assisted assessment path.
 
 ```bash
 cwiki eval . --llm
@@ -779,12 +787,24 @@ cwiki eval-all . --answer answer.md --llm
 Behavior:
 
 - Always run deterministic evaluation first.
-- If `.env` config provides a model, the CLI can call that model for the LLM-assisted section.
-- If running inside an agent platform, the agent may produce the LLM-assisted section with its current model.
-- If no model is available, print only deterministic output and state that LLM-assisted evaluation was skipped.
+- If `.env` config provides a model and API key, the CLI can call that model for the LLM-assisted section.
+- If evaluation is being handled by an agent platform, use the current agent model for the LLM-assisted section instead of calling the project's `.env` model.
+- If no model key is available, keep deterministic output and mark LLM-assisted evaluation as `skipped`.
 - Clearly label the LLM-assisted section.
+- Record provider, model, status, and timestamp in the report.
 - Feed the LLM only the deterministic report, cited pages, answer text, and necessary snippets by default, not the entire wiki.
 - Treat the LLM output as interpretive guidance, not as the source of truth.
+
+### Phase 6: Scheduled Combined Evaluation
+
+Implemented as local wiki configuration:
+
+```bash
+cwiki eval-schedule . --every-days 7 --llm
+cwiki eval-schedule . --run-if-due
+```
+
+The schedule is stored under `.cwiki/eval/schedule.json`. It does not create an operating-system timer by itself; users can call `--run-if-due` from cron, Task Scheduler, CI, or an agent platform automation. For agent-platform automations, prefer deterministic CLI eval plus an agent-written LLM-assisted section using the active platform model; use `--llm` only when the CLI should call the local `.env` model.
 
 ## Open Questions
 

@@ -175,7 +175,7 @@ New wikis include two non-placeholder first reading surfaces:
 - `wiki/overview.md` is the early-stage entry point. It maps the domain, important page clusters, navigation paths, and open map questions.
 - `wiki/synthesis.md` becomes the entry point when the wiki has enough source-backed material for an integrated thesis. It records stable claims, tensions, contradictions, and update triggers.
 
-Use one as the first screen depending on wiki maturity: start with `overview.md` while sources are sparse; start with `synthesis.md` when cross-page evidence supports a durable conclusion. Keep both pages short and useful, and avoid duplicating `wiki/index.md`.
+Use one as the first screen depending on wiki maturity: start with `overview.md` while sources are sparse; start with `synthesis.md` when cross-page evidence supports a durable conclusion. Keep both pages short and useful, and avoid duplicating `wiki/index.md`. Every ingest or update should refresh both files: `overview.md` gets the current map and entry links; `synthesis.md` gets the current thesis state, contradictions, evidence inventory, or an explicit note that no thesis has been promoted yet.
 
 ### 5. Maintain and Search
 
@@ -216,7 +216,10 @@ cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
 cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
-cwiki eval <dir> [--output <file>] [--no-write]
+cwiki eval <dir> [--output <file>] [--no-write] [--json]
+cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
+cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
+cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -225,6 +228,10 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 `ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
 
 The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings.
+
+For agent-platform Q&A, use the hybrid query workflow. Start with `cwiki ask` so the question has a reproducible evidence prompt and brief. The agent should read those artifacts and the listed wiki pages first; if the prompt is incomplete, it may search the wiki again, inspect adjacent pages, and follow one level of useful `[[wikilinks]]`. Final prose should still follow the project answer protocol: `## Evidence Used`, `## Answer`, and `## Gaps`, with `[[slug]]` citations and source paths or URLs near factual claims. If current web evidence is needed, switch to `cwiki web-ask` and `wiki-agent-browser` rather than relying on model memory.
+
+See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answering workflow.
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
@@ -235,6 +242,12 @@ A future terminal-only `web-answer` flow could combine wiki retrieval, live web 
 A browser-capable agent using `wiki-agent-browser` should read the local wiki first, search the web when enabled, open source pages before citing them, and record results under `.cwiki/web-research/`. Final answers should separate local evidence, web evidence, synthesis, and gaps. Every external factual claim needs an exact URL and access date. Durable web sources should be recorded with `cwiki capture . <url> --title "<title>"` before they are ingested into `wiki/`.
 
 `answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
+
+`eval`, `eval-answer`, and `eval-all` generate quality reports under `.cwiki/eval/`. They always include deterministic local checks and detailed quality signals. `eval` checks compiled wiki quality; `eval-answer` checks a specific answer for grounding, source use, context coverage, protocol structure, and risk signals; `eval-all` combines wiki quality with answer quality. By default, `eval-all` scans `.cwiki/answers/` and uses the latest `answer-*.md`; use `--answer` to pin a specific answer, or `--wiki-only` to evaluate only the wiki. Add `--json` when CI or an agent needs machine-readable output.
+
+Add `--llm` when the CLI itself should call the `.env` configured model for an LLM-assisted evaluation section. The report records the provider, model, status, and timestamp used for that assessment. If no API key is configured, deterministic evaluation still completes and the LLM section is marked `skipped`.
+
+When the wiki is being operated inside an agent platform such as Trae, Codex, Claude Code, or Cursor, the LLM-assisted interpretation should use that platform's current model instead of this project's `.env` model settings. In that case, run the deterministic eval command normally, then let the agent add or summarize the LLM-assisted evaluation with model metadata such as `provider: agent-platform` and `model: current agent model` or the platform's visible model name. Use `cwiki eval-schedule . --every-days 7 --llm` only for terminal/CLI model evaluation; for agent-platform scheduling, configure the platform automation to run deterministic eval and then use the active agent model for the assisted section.
 
 ## Model Configuration
 
@@ -282,6 +295,8 @@ The `.env` model settings control terminal/CLI workflows that the project itself
 
 If you ask an agent to work inside a generated wiki folder, the final prose is usually generated by that agent's active model. The agent should read the wiki's local `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, prefer the skills in `.claude/skills/` or `.agents/skills/`, and use those local workflows for capture, ingest, query, update, lint, and browser research. If the local skills do not cover the task, the agent may use its own platform tools or an exploratory implementation while preserving the wiki schema and source-citation rules.
 
+For wiki questions inside an agent platform, the recommended path is hybrid: `cwiki ask` creates the stable prompt and evidence brief, then the agent uses its active model to answer, optionally reading extra wiki pages only when the prompt context is incomplete. This keeps answers reproducible without trapping the agent inside an under-retrieved context pack.
+
 The web evidence weights in `.env` are execution or prompt settings, not a hidden reranker inside the agent. In CLI workflows, `cwiki web-ask` reads them and writes them into the browser research and fusion prompts; it does not execute the browser research itself. In agent workflows, the agent should follow the generated prompt weights or the local wiki instructions when synthesizing local wiki evidence with web evidence.
 
 ## Page Format
@@ -321,8 +336,9 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 2. Treat `raw/` as read-only evidence.
 3. Put generated knowledge in the right wiki section: summaries, entities, concepts, comparisons, overview, or synthesis.
 4. Every factual claim needs a source path or URL.
-5. After ingesting or saving an analysis, run `cwiki index .`.
-6. After several ingests, run `cwiki lint .` and fix broken links, stale claims, and orphan pages.
+5. Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update so the global map and thesis state are not left as placeholders.
+6. After ingesting or saving an analysis, run `cwiki index .`.
+7. After several ingests, run `cwiki lint .` and fix broken links, stale claims, and orphan pages.
 
 `CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
 
