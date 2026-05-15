@@ -13,11 +13,25 @@
 
 当你希望先获得一个可复现的证据边界，再让 agent 生成最终文字时，用这条路径。
 
+可以用 `--retrieval auto|direct|graph|path|synthesis` 控制图谱上下文加入的深度。`auto` 会根据问题复杂度自动选择策略，并在 prompt 的 Retrieval Trace 中记录本次选择。
+
+### 分层检索策略
+
+- `direct`：只使用直接关键词/向量命中的页面。适合单点事实查询。
+- `graph`：在 direct hits 基础上加入图谱中的入边/出边邻居页面。适合需要附近概念、角色、模块或相关实体的查询。
+- `path`：在 graph 上下文基础上加入 top hits 之间的最短路径证据。适合流程、机制、依赖、关系、how/why 类问题。
+- `synthesis`：加入 direct、graph、path 证据，以及 `overview.md`、`synthesis.md` 和中心节点。适合综合总结、对比、取舍、策略和评估类问题。
+- `auto`：由 CLI 根据问题自动选择。若 `auto` 选中 `path` 但没有找到任何路径证据，会自动回退到 `graph`，并在 Retrieval Trace 中写明回退原因。
+
+图检索不是把图谱当作事实来源，而是把 `.cwiki/graph/graph.json` 当作导航层：direct hits 是主证据，Graph-Expanded Pages 是邻近上下文，Path Evidence 用来解释页面之间的关系，Final Context Pages 是本次可复现的证据包。
+
 ### CLI 调模型回答
 
 `cwiki answer <dir> "<question>"` 会调用 `.env` 配置的 provider/model，并把草稿写入 `.cwiki/answers/`。
 
 这条路径偏终端使用。它会使用本地 wiki 检索和配置的大模型，但不会执行实时联网搜索。
+
+它和 `ask` 使用同一套 retrieval strategy，因此后续 answer evaluation 可以读取关联 query prompt，并评价本次检索质量。
 
 ### Agent 平台混合式回答
 

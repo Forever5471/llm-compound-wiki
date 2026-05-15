@@ -45,7 +45,7 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 
 Use this when answering inside an agent platform such as Codex, Trae, Claude Code, Cursor, or OpenCode.
 
-1. Prefer the standard path first: run `cwiki ask . "<question>"` when no suitable query prompt exists.
+1. Prefer the standard path first: run `cwiki ask . "<question>" --retrieval auto` when no suitable query prompt exists.
 2. Read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`; treat the prompt as the reproducible evidence boundary.
 3. Read every relevant page listed in the prompt from disk, plus `wiki/index.md`.
 4. If the prompt context is incomplete, search or inspect additional high-signal wiki pages and follow one level of useful `[[wikilinks]]`.
@@ -53,6 +53,16 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 6. Final prose comes from the current agent model, not `.env`, unless the user explicitly asks for `cwiki answer`.
 7. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`; cite `[[slug]]` pages and source paths or URLs near factual claims.
 8. In `## Evidence Used`, mark prompt-listed pages as `used` or `not used - reason`, and list any extra pages or web sources discovered during hybrid exploration.
+
+## Layered Retrieval Strategy
+
+- `direct`: direct keyword/vector hits only; use for narrow fact lookup.
+- `graph`: direct hits plus inbound/outbound wikilink neighbors from `.cwiki/graph/graph.json`; use when nearby concepts, roles, modules, or entities may matter.
+- `path`: direct hits plus graph neighbors plus shortest-path evidence between top hits; use for workflows, mechanisms, dependencies, relationships, and how/why questions.
+- `synthesis`: direct hits plus graph context, path evidence, and global overview/synthesis/central pages; use for broad summaries, comparisons, tradeoffs, strategy, or evaluation.
+- `auto`: CLI-selected layer. If `auto` selects `path` but finds no path evidence, it falls back to `graph` and records the fallback in Retrieval Trace.
+
+For graph retrieval, refresh `cwiki graph-report .` after link or page changes. Read Retrieval Trace as the contract: direct hits are primary evidence, graph-expanded pages are nearby context, path evidence explains relationships, and final context pages are the reproducible evidence pack.
 
 ## Local Configuration
 
@@ -65,7 +75,7 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
-- For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Run deterministic `cwiki eval`, `cwiki eval-answer`, or `cwiki eval-all` first, then add or summarize the LLM-assisted section with `provider: agent-platform` and the visible model name when available.
+- For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Write the assisted assessment to `.cwiki/eval/agent-assisted-*.md`, then attach it with `--agent-eval-file <file> --agent-model <visible-model-name>` so the official report records `provider: agent-platform`.
 - Prefer this folder's local instructions and skills before platform-specific skills: read `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, then use `.claude/skills/` or `.agents/skills/` for capture, ingest, query, update, lint, and browser research.
 - For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask` for a stable prompt and evidence brief, then let the agent inspect additional wiki pages only when the prompt is incomplete.
 - If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
@@ -133,13 +143,14 @@ Trigger when the user asks a question about wiki knowledge.
 
 Action:
 
-1. Prefer `wiki-query`: run `cwiki ask . "<question>"` if no suitable query prompt already exists.
+1. Prefer `wiki-query`: run `cwiki ask . "<question>" --retrieval auto` if no suitable query prompt already exists. Use `--retrieval graph` to inspect nearby concepts, `--retrieval path` for relationship/mechanism/workflow questions, and `--retrieval synthesis` for synthesis-heavy questions.
 2. Read the generated query prompt and evidence brief.
-3. Read `wiki/index.md` and the relevant wiki pages in full.
-4. Follow one level of relevant wikilinks when the prompt context is incomplete.
-5. Answer with local citations like `[[topic]]` and source paths or URLs.
-6. State gaps explicitly, including any extra pages inspected or prompt-listed pages that were not useful.
-7. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+3. Read the prompt's Retrieval Trace to understand direct hits, graph-expanded pages, and path evidence.
+4. Read `wiki/index.md` and the relevant wiki pages in full.
+5. Follow one level of relevant wikilinks when the prompt context is incomplete.
+6. Answer with local citations like `[[topic]]` and source paths or URLs.
+7. State gaps explicitly, including any extra pages inspected or prompt-listed pages that were not useful.
+8. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 
 ### Graph
 
@@ -148,7 +159,7 @@ Trigger when the user asks about relationships, paths, impact analysis, central 
 Action:
 
 1. Run `cwiki graph-report .`.
-2. Read `.cwiki/graph/GRAPH_REPORT.md`.
+2. Read `.cwiki/graph/graph.md`.
 3. Use `cwiki path . <from> <to>` for explicit relationship paths.
 4. Use `cwiki explain . <slug>` for a node-level view.
 5. Cite local pages as `[[slug]]` and mention when the graph only reflects existing wikilinks.

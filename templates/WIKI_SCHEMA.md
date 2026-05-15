@@ -121,22 +121,31 @@ Keep both pages lightweight and useful. Do not duplicate `wiki/index.md`; link t
 
 For agent-platform use, query should be hybrid: the generated prompt provides a stable evidence boundary, and the agent may inspect more wiki pages only when that boundary is incomplete.
 
-1. Run `cwiki ask . "<question>"` when no suitable query prompt exists.
+1. Run `cwiki ask . "<question>" --retrieval auto` when no suitable query prompt exists.
 2. Read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`.
-3. Read `wiki/index.md` first.
-4. Read relevant wiki pages in full across `summaries/`, `entities/`, `concepts/`, `comparisons/`, `overview.md`, and `synthesis.md`.
-5. Follow one level of relevant `[[wikilinks]]` when the prompt context is insufficient.
-6. Answer using local page citations like `[[topic]]` and source paths or URLs.
-7. Use the sections `## Evidence Used`, `## Answer`, and `## Gaps`.
-8. In `## Evidence Used`, mark prompt-listed pages as used or not used, and list any extra pages discovered during hybrid exploration.
-9. State gaps explicitly.
-10. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
+3. Read the Retrieval Trace to see the chosen strategy, direct hits, graph-expanded pages, path evidence, and final context pages.
+4. Read `wiki/index.md` first.
+5. Read relevant wiki pages in full across `summaries/`, `entities/`, `concepts/`, `comparisons/`, `overview.md`, and `synthesis.md`.
+6. Follow one level of relevant `[[wikilinks]]` when the prompt context is insufficient.
+7. Answer using local page citations like `[[topic]]` and source paths or URLs.
+8. Use the sections `## Evidence Used`, `## Answer`, and `## Gaps`.
+9. In `## Evidence Used`, mark prompt-listed pages as used or not used, and list any extra pages discovered during hybrid exploration.
+10. State gaps explicitly.
+11. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
+
+### Retrieval Layers
+
+- `direct`: direct keyword/vector hits only; use for narrow fact lookup.
+- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated graph; use for nearby concepts, roles, modules, and related entities.
+- `path`: direct hits plus graph neighbors plus shortest-path evidence between top hits; use for workflows, mechanisms, dependencies, relationships, and how/why questions.
+- `synthesis`: direct hits plus graph context, path evidence, and overview/synthesis/central pages; use for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
+- `auto`: CLI-selected layer. If `auto` selects `path` but no path evidence exists, it falls back to `graph` and records the fallback in Retrieval Trace.
 
 ## Graph Workflow
 
 Use this when a question is about relationships, paths, impact, central pages, or graph structure.
 
-1. Run `cwiki graph-report .` to generate `.cwiki/graph/graph.json` and `.cwiki/graph/GRAPH_REPORT.md`.
+1. Run `cwiki graph-report .` to generate `.cwiki/graph/graph.json` and `.cwiki/graph/graph.md`.
 2. Treat the graph as a derived navigation artifact. The canonical knowledge remains in `wiki/`.
 3. Use `cwiki path . <from> <to>` for shortest wikilink paths.
 4. Use `cwiki explain . <slug>` for inbound links, outbound links, and claim sources.

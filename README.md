@@ -217,9 +217,9 @@ cwiki graph-report <dir>
 cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
 cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
-cwiki ask <dir> <question> [--top-k 6] [--show-context]
+cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
@@ -237,7 +237,15 @@ For agent-platform Q&A, use the hybrid query workflow. Start with `cwiki ask` so
 
 See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answering workflow.
 
-`graph` and `graph-report` generate a lightweight graph layer from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/GRAPH_REPORT.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree. This graph layer is the base for future graph-aware retrieval.
+`graph` and `graph-report` generate a lightweight graph layer from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/graph.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree.
+
+`ask --retrieval auto|direct|graph|path|synthesis` uses this layer to record a Retrieval Trace in query prompts:
+
+- `direct`: direct keyword/vector hits for narrow fact lookup.
+- `graph`: direct hits plus inbound/outbound wikilink neighbors for nearby concepts, roles, modules, and entities.
+- `path`: graph context plus shortest-path evidence for workflows, mechanisms, dependencies, relationships, and how/why questions.
+- `synthesis`: direct, graph, path, overview/synthesis, and central-node context for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
+- `auto`: CLI-selected layer. If `auto` selects `path` but finds no path evidence, it falls back to `graph` and records the fallback in Retrieval Trace.
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
@@ -253,7 +261,14 @@ A browser-capable agent using `wiki-agent-browser` should read the local wiki fi
 
 Add `--llm` when the CLI itself should call the `.env` configured model for an LLM-assisted evaluation section. The report records the provider, model, status, and timestamp used for that assessment. If no API key is configured, deterministic evaluation still completes and the LLM section is marked `skipped`.
 
-When the wiki is being operated inside an agent platform such as Trae, Codex, Claude Code, or Cursor, the LLM-assisted interpretation should use that platform's current model instead of this project's `.env` model settings. In that case, run the deterministic eval command normally, then let the agent add or summarize the LLM-assisted evaluation with model metadata such as `provider: agent-platform` and `model: current agent model` or the platform's visible model name. Use `cwiki eval-schedule . --every-days 7 --llm` only for terminal/CLI model evaluation; for agent-platform scheduling, configure the platform automation to run deterministic eval and then use the active agent model for the assisted section.
+When the wiki is being operated inside an agent platform such as Trae, Codex, Claude Code, or Cursor, the LLM-assisted interpretation should use that platform's current model instead of this project's `.env` model settings. Let the agent write its assisted assessment to a Markdown file, then attach it to the official report:
+
+```bash
+cwiki eval-answer . .cwiki/answers/answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+cwiki eval-all . --answer .cwiki/answers/answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+```
+
+The report records `provider: agent-platform`, the supplied model label, timestamp, and source file. Use `cwiki eval-schedule . --every-days 7 --llm` only for terminal/CLI model evaluation; for agent-platform scheduling, configure the platform automation to run deterministic eval and then attach the active agent model's assisted section with `--agent-eval-file`.
 
 ## Model Configuration
 

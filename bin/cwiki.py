@@ -28,6 +28,7 @@ TEMPLATE_ROOT = PROJECT_ROOT / "templates"
 WIKI_SECTIONS = ["summaries", "entities", "concepts", "comparisons"]
 IGNORED_WIKI_FILES = {"index.md", "log.md"}
 DEFAULT_TOP_K = 6
+RETRIEVAL_MODES = {"auto", "direct", "graph", "path", "synthesis"}
 DEFAULT_WIKI_WEIGHT = 0.6
 DEFAULT_WEB_WEIGHT = 0.4
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
@@ -613,12 +614,14 @@ def eval_wiki(
     api_key_env: str | None = None,
     base_url: str | None = None,
     max_output_tokens: int = 1000,
+    agent_eval_file: str | None = None,
+    agent_model: str | None = None,
 ) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
     pages = collect_pages(root)
     result = build_wiki_eval(root, pages)
-    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens)
+    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens, agent_eval_file, agent_model)
     report = render_eval_json(result) if json_output else render_wiki_eval_report(root, result)
     print(report)
 
@@ -647,13 +650,15 @@ def eval_answer(
     api_key_env: str | None = None,
     base_url: str | None = None,
     max_output_tokens: int = 1000,
+    agent_eval_file: str | None = None,
+    agent_model: str | None = None,
 ) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
     answer_file = resolve_answer_file(root, answer)
     pages = collect_pages(root)
     result = build_answer_eval(root, answer_file, pages)
-    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens)
+    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens, agent_eval_file, agent_model)
     report = render_eval_json(result) if json_output else render_answer_eval_report(root, result)
     print(report)
 
@@ -683,6 +688,8 @@ def eval_all(
     api_key_env: str | None = None,
     base_url: str | None = None,
     max_output_tokens: int = 1000,
+    agent_eval_file: str | None = None,
+    agent_model: str | None = None,
 ) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
@@ -693,7 +700,7 @@ def eval_all(
     answer_file = resolve_eval_all_answer_file(root, answer, wiki_only)
     answer_result = build_answer_eval(root, answer_file, pages) if answer_file else None
     result = build_combined_eval(root, wiki_result, answer_result, answer_selection(root, answer, answer_file, wiki_only))
-    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens)
+    attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens, agent_eval_file, agent_model)
     report = render_eval_json(result) if json_output else render_combined_eval_report(root, result)
     print(report)
 
@@ -1142,6 +1149,7 @@ def build_answer_eval(root: Path, answer_file: Path, pages: list[Page]) -> dict[
     if web_without_sources:
         warnings.append(warning("P2", display_path(answer_file, root), answer_eval_text(language, "web_without_sources"), "protocol"))
 
+    retrieval_result = retrieval_quality_eval(root, text, answer_links, warnings, language, answer_file)
     grounding_score = clamp_score(100 - (len(broken_links) * 25 + (0 if answer_links else 20)))
     source_score = clamp_score(100 - (len(unsupported) * 10 + len(prompt_paths) * 15 + (0 if source_refs else 15) + (10 if urls_without_access_date else 0)))
     coverage_score = clamp_score(100 - (len(missed_relevant) * 8 + (20 if relevant_pages and not used_relevant else 0)))
@@ -1181,6 +1189,7 @@ def build_answer_eval(root: Path, answer_file: Path, pages: list[Page]) -> dict[
             "source_use": source_score,
             "coverage": coverage_score,
             "protocol": protocol_score,
+            "retrieval_quality": retrieval_result["score"],
         },
         "risk": risk,
         "counts": {
@@ -1196,6 +1205,13 @@ def build_answer_eval(root: Path, answer_file: Path, pages: list[Page]) -> dict[
             "used_relevant_pages": len(used_relevant),
             "not_used_relevant_pages": len(explicitly_not_used),
             "answer_chars": len(answer_content),
+            "retrieval_trace_available": bool(retrieval_result["available"]),
+            "retrieval_direct_hits": len(retrieval_result["direct_hits"]),
+            "retrieval_used_direct_hits": len(retrieval_result["used_direct_hits"]),
+            "retrieval_graph_expanded": len(retrieval_result["graph_expanded"]),
+            "retrieval_used_graph_expanded": len(retrieval_result["used_graph_expanded"]),
+            "retrieval_path_evidence": retrieval_result["path_evidence_count"],
+            "retrieval_fallback": bool(retrieval_result.get("fallback_reason")),
         },
         "signals": answer_quality_signals(
             answer_content,
@@ -1216,8 +1232,10 @@ def build_answer_eval(root: Path, answer_file: Path, pages: list[Page]) -> dict[
             web_without_sources,
             risk,
             language,
+            retrieval_result,
         ),
         "warnings": warnings,
+        "retrieval": retrieval_result,
     }
 
 
@@ -1367,6 +1385,7 @@ def answer_quality_signals(
     web_without_sources: bool,
     risk: str,
     language: str,
+    retrieval_result: dict[str, object],
 ) -> list[dict[str, object]]:
     return [
         quality_signal("answer_body_completeness", signal_status(len(answer_content) < 40, len(answer_content) < 120), f"Answer body characters after scaffolding removal: {len(answer_content)}"),
@@ -1379,6 +1398,11 @@ def answer_quality_signals(
         quality_signal("gaps_and_uncertainty", signal_status(False, not has_gap_signal), "Gaps/limitations signal present" if has_gap_signal else "No gaps/limitations signal found"),
         quality_signal("url_access_dates", signal_status(False, urls_without_access_date), f"URLs: {len(urls)}; missing access-date signal: {urls_without_access_date}"),
         quality_signal("web_evidence_protocol", signal_status(False, web_without_sources), "Web evidence mentioned without sources" if web_without_sources else "No web protocol issue detected"),
+        quality_signal(
+            "retrieval_quality",
+            signal_status(int(retrieval_result.get("score", 0)) < 60, int(retrieval_result.get("score", 0)) < 85),
+            f"Strategy: {retrieval_result.get('strategy', 'unknown')}; complexity: {retrieval_result.get('complexity', 'unknown')}; score: {retrieval_result.get('score', 0)}",
+        ),
         quality_signal("risk_level", signal_status(risk == "high", risk == "medium"), f"Risk classified as {risk}"),
     ]
 
@@ -1406,11 +1430,35 @@ def attach_llm_eval(
     api_key_env: str | None,
     base_url: str | None,
     max_output_tokens: int,
+    agent_eval_file: str | None = None,
+    agent_model: str | None = None,
 ) -> None:
+    if agent_eval_file:
+        result["llm_assisted"] = load_agent_platform_eval(root, agent_eval_file, agent_model)
+        return
     if not enabled:
         result["llm_assisted"] = None
         return
     result["llm_assisted"] = run_llm_eval(root, result, provider, model, api_key_env, base_url, max_output_tokens)
+
+
+def load_agent_platform_eval(root: Path, agent_eval_file: str, agent_model: str | None = None) -> dict[str, object]:
+    path = resolve_agent_eval_file(root, agent_eval_file)
+    payload = llm_eval_status("completed", "agent-platform", agent_model or "current-agent-model", "", "")
+    payload["response"] = path.read_text(encoding="utf-8").strip()
+    payload["prompt_version"] = "eval-agent-platform-v1"
+    payload["source_file"] = display_path(path, root)
+    return payload
+
+
+def resolve_agent_eval_file(root: Path, value: str) -> Path:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if not candidate.is_file():
+        raise RuntimeError(f"Agent evaluation file not found: {value}")
+    return candidate
 
 
 def run_llm_eval(
@@ -1437,12 +1485,14 @@ def run_llm_eval(
             resolved_api_key_env,
             f"Missing API key in {resolved_api_key_env}; deterministic evaluation is still complete.",
         )
+    language = str(result.get("language", "en"))
+    language_instruction = llm_eval_language_instruction(language)
     instructions = (
         "You are assisting with quality evaluation for an LLM Compound Wiki. "
         "This is an LLM-assisted evaluation, not the deterministic source of record. "
         "Do not remove, override, or hide deterministic warnings. "
         "Use the deterministic report and excerpts only. "
-        "Return concise Markdown with sections: Summary, Additional Risks, Prioritized Fixes, Confidence."
+        f"{language_instruction} "
     )
     prompt = build_llm_eval_prompt(root, result)
     try:
@@ -1462,8 +1512,18 @@ def run_llm_eval(
         return llm_eval_status("failed", resolved_provider, resolved_model, resolved_api_key_env, str(error))
     payload = llm_eval_status("completed", resolved_provider, resolved_model, resolved_api_key_env, "")
     payload["response"] = text
-    payload["prompt_version"] = "eval-llm-v1"
+    payload["prompt_version"] = "eval-llm-v2"
     return payload
+
+
+def llm_eval_language_instruction(language: str) -> str:
+    if language == "zh-CN":
+        return (
+            "Respond entirely in Simplified Chinese. "
+            "Return concise Markdown with exactly these sections: "
+            "摘要, 额外风险, 优先修复, 置信度."
+        )
+    return "Respond in English. Return concise Markdown with sections: Summary, Additional Risks, Prioritized Fixes, Confidence."
 
 
 def llm_eval_status(status: str, provider: str, model: str, api_key_env: str, reason: str) -> dict[str, object]:
@@ -1498,10 +1558,13 @@ def resolve_eval_api_key_env(provider: str, api_key_env: str | None) -> str:
 def build_llm_eval_prompt(root: Path, result: dict[str, object]) -> str:
     deterministic = {key: value for key, value in result.items() if key not in {"llm_assisted", "wiki", "answer"}}
     excerpts = "\n\n".join(eval_context_excerpts(root, result))
+    language = str(result.get("language", "en"))
+    language_label = "Simplified Chinese (zh-CN)" if language == "zh-CN" else "English"
     return f"""# LLM-Assisted Evaluation Request
 
 Evaluation mode: {result.get('mode')}
 Target: {display_path(Path(result.get('target', root)), root) if result.get('target') else root.as_posix()}
+Required response language: {language_label}
 
 ## Deterministic Report JSON
 
@@ -1519,6 +1582,7 @@ Target: {display_path(Path(result.get('target', root)), root) if result.get('tar
 2. Identify quality risks that deterministic checks may miss.
 3. Prioritize fixes that would most improve future wiki maintenance and answer quality.
 4. State confidence and limitations of this LLM-assisted evaluation.
+5. Use the required response language. Do not switch languages unless source snippets must be quoted exactly.
 """
 
 
@@ -1638,6 +1702,182 @@ def extract_relevant_page_slugs(text: str) -> list[str]:
     return result
 
 
+def extract_query_prompt_ref(text: str) -> str:
+    section = extract_markdown_section(markdown_body(text), "Query Prompt")
+    if not section:
+        return ""
+    refs = find_path_refs(section, [".cwiki/prompts/"])
+    return refs[0] if refs else ""
+
+
+def resolve_query_prompt_file(root: Path, answer_text: str) -> Path | None:
+    ref = extract_query_prompt_ref(answer_text)
+    if not ref:
+        return None
+    normalized = ref[2:] if ref.startswith("./") else ref
+    candidate = (root / normalized).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def parse_retrieval_trace(prompt_text: str) -> dict[str, object]:
+    frontmatter = parse_frontmatter(prompt_text)
+    body = markdown_body(prompt_text)
+    trace_section = extract_markdown_section(body, "Retrieval Trace")
+    direct_section = extract_markdown_section(body, "Direct Hits")
+    expanded_section = extract_markdown_section(body, "Graph-Expanded Pages")
+    path_section = extract_markdown_section(body, "Path Evidence")
+    final_section = extract_markdown_section(body, "Final Context Pages")
+    path_lines = [line for line in path_section.splitlines() if "[[" in line and "None" not in line]
+    graph_details = parse_graph_expanded_lines(expanded_section)
+    path_evidence = [wikilinks(line) for line in path_lines]
+    path_evidence = [path for path in path_evidence if len(path) >= 2]
+    return {
+        "available": bool(trace_section or frontmatter.get("retrieval_strategy")),
+        "strategy": clean_quoted(frontmatter.get("retrieval_strategy", "")) or "unknown",
+        "requested": clean_quoted(frontmatter.get("retrieval_requested", "")) or "unknown",
+        "complexity": clean_quoted(frontmatter.get("retrieval_complexity", "")) or "unknown",
+        "fallback_from": clean_quoted(frontmatter.get("retrieval_fallback_from", "")),
+        "fallback_reason": clean_quoted(frontmatter.get("retrieval_fallback_reason", "")),
+        "direct_hits": wikilinks(direct_section),
+        "graph_expanded": list(dict.fromkeys(item["slug"] for item in graph_details)),
+        "graph_expanded_details": graph_details,
+        "path_evidence": path_evidence,
+        "path_evidence_count": len(path_evidence),
+        "final_pages": wikilinks(final_section),
+    }
+
+
+def parse_graph_expanded_lines(section: str) -> list[dict[str, object]]:
+    details: list[dict[str, object]] = []
+    for line in section.splitlines():
+        if "[[" not in line or "None" in line:
+            continue
+        links = wikilinks(line)
+        if not links:
+            continue
+        score_match = re.search(r"\]\]\s+\((\d+)\)", line)
+        file_match = re.search(r"`([^`]+)`", line)
+        reason = ""
+        if "`" in line:
+            tail = line.rsplit("`", 1)[-1].strip()
+            reason = tail[1:].strip() if tail.startswith("-") else tail
+        details.append(
+            {
+                "slug": links[0],
+                "score": int(score_match.group(1)) if score_match else 0,
+                "file": file_match.group(1) if file_match else "",
+                "reason": reason,
+                "line": line.strip(),
+            }
+        )
+    return details
+
+
+def add_graph_expanded_usage(details: object, answer_link_set: set[str]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    if not isinstance(details, list):
+        return result
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("slug", ""))
+        result.append({**item, "used_in_answer": slug in answer_link_set})
+    return result
+
+
+def retrieval_quality_eval(
+    root: Path,
+    answer_text: str,
+    answer_links: list[str],
+    warnings: list[dict[str, str]],
+    language: str,
+    answer_file: Path,
+) -> dict[str, object]:
+    prompt_ref = extract_query_prompt_ref(answer_text)
+    prompt_file = resolve_query_prompt_file(root, answer_text)
+    if not prompt_file:
+        local_warnings = []
+        score = 100
+        if prompt_ref:
+            warnings.append(warning("P3", display_path(answer_file, root), answer_eval_text(language, "retrieval_trace_missing"), "retrieval"))
+            local_warnings = ["missing_trace"]
+            score = 85
+        return {
+            "score": score,
+            "prompt_file": prompt_ref,
+            "available": False,
+            "strategy": "unknown",
+            "complexity": "unknown",
+            "direct_hits": [],
+            "used_direct_hits": [],
+            "graph_expanded": [],
+            "used_graph_expanded": [],
+            "graph_expanded_details": [],
+            "path_evidence_count": 0,
+            "path_evidence": [],
+            "fallback_from": "",
+            "fallback_reason": "",
+            "final_pages": [],
+            "warnings": local_warnings,
+        }
+
+    prompt_text = prompt_file.read_text(encoding="utf-8")
+    trace = parse_retrieval_trace(prompt_text)
+    answer_link_set = set(answer_links)
+    direct_hits = list(dict.fromkeys(str(slug) for slug in trace.get("direct_hits", [])))
+    graph_expanded = list(dict.fromkeys(str(slug) for slug in trace.get("graph_expanded", [])))
+    final_pages = list(dict.fromkeys(str(slug) for slug in trace.get("final_pages", [])))
+    used_direct = sorted(answer_link_set.intersection(direct_hits))
+    used_expanded = sorted(answer_link_set.intersection(graph_expanded))
+    graph_expanded_details = add_graph_expanded_usage(trace.get("graph_expanded_details", []), answer_link_set)
+    score = 100
+    local_warnings: list[str] = []
+
+    if not trace.get("available"):
+        score -= 15
+        local_warnings.append("missing_trace")
+        warnings.append(warning("P3", display_path(prompt_file, root), answer_eval_text(language, "retrieval_trace_missing"), "retrieval"))
+    if direct_hits and not used_direct:
+        score -= 20
+        local_warnings.append("direct_hits_not_used")
+        warnings.append(warning("P2", display_path(answer_file, root), answer_eval_text(language, "retrieval_direct_not_used"), "retrieval"))
+    unused_expanded = [slug for slug in graph_expanded if slug not in answer_link_set]
+    if graph_expanded and len(unused_expanded) == len(graph_expanded):
+        score -= 10
+        local_warnings.append("graph_expansion_not_used")
+    if trace.get("strategy") in {"path", "synthesis"} and int(trace.get("path_evidence_count", 0)) > 0:
+        path_nodes_used = bool(answer_link_set.intersection(final_pages))
+        if not path_nodes_used:
+            score -= 15
+            local_warnings.append("path_context_not_used")
+    if trace.get("strategy") == "direct" and str(trace.get("complexity")) == "high":
+        score -= 10
+        local_warnings.append("complex_question_direct_only")
+
+    return {
+        "score": clamp_score(score),
+        "prompt_file": display_path(prompt_file, root),
+        "available": bool(trace.get("available")),
+        "strategy": trace.get("strategy", "unknown"),
+        "complexity": trace.get("complexity", "unknown"),
+        "direct_hits": direct_hits,
+        "used_direct_hits": used_direct,
+        "graph_expanded": graph_expanded,
+        "used_graph_expanded": used_expanded,
+        "graph_expanded_details": graph_expanded_details,
+        "path_evidence_count": int(trace.get("path_evidence_count", 0)),
+        "path_evidence": trace.get("path_evidence", []),
+        "fallback_from": trace.get("fallback_from", ""),
+        "fallback_reason": trace.get("fallback_reason", ""),
+        "final_pages": final_pages,
+        "warnings": local_warnings,
+    }
+
+
 def extract_not_used_page_slugs(text: str) -> set[str]:
     result: set[str] = set()
     for line in text.splitlines():
@@ -1734,6 +1974,8 @@ def answer_eval_text(language: str, key: str, **values: object) -> str:
         "web_without_sources": "答案提到联网/网络证据，但缺少 Sources 或 Web evidence 章节。",
         "answer_too_short": "答案正文过短，可能是截断或只输出了评估脚手架。",
         "unclosed_wikilink": "答案包含未闭合的 wikilink，可能是生成被截断。",
+        "retrieval_trace_missing": "没有找到本次问答的 Retrieval Trace，无法评估检索质量。",
+        "retrieval_direct_not_used": "本次检索的直接命中页面没有在答案正文中使用。",
     }
     en = {
         "broken_wikilink": "Answer cites a missing wiki page: [[{slug}]].",
@@ -1749,6 +1991,8 @@ def answer_eval_text(language: str, key: str, **values: object) -> str:
         "web_without_sources": "Answer mentions web/online evidence but has no Sources or Web evidence section.",
         "answer_too_short": "Answer body is too short and may be truncated or only contain evaluation scaffolding.",
         "unclosed_wikilink": "Answer contains an unclosed wikilink and may be truncated.",
+        "retrieval_trace_missing": "No Retrieval Trace was found for this answer, so retrieval quality cannot be evaluated.",
+        "retrieval_direct_not_used": "The answer does not use any direct-hit pages from retrieval.",
     }
     template = (zh if language == "zh-CN" else en)[key]
     return template.format(**values)
@@ -2026,6 +2270,44 @@ Maintainability: {scores['maintainability']}/100
 """
 
 
+def render_graph_expanded_eval_details(retrieval: object, language: str) -> str:
+    if not isinstance(retrieval, dict):
+        return "- 暂无图谱扩展页面。" if language == "zh-CN" else "- No graph-expanded pages."
+    details = retrieval.get("graph_expanded_details", [])
+    if not isinstance(details, list) or not details:
+        return "- 暂无图谱扩展页面。" if language == "zh-CN" else "- No graph-expanded pages."
+    lines: list[str] = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("slug", ""))
+        file = str(item.get("file", ""))
+        reason = str(item.get("reason", "")) or "-"
+        score = item.get("score", 0)
+        used = bool(item.get("used_in_answer"))
+        if language == "zh-CN":
+            used_text = "已在答案引用" if used else "未在答案引用"
+        else:
+            used_text = "used in answer" if used else "not cited in answer"
+        file_text = f" `{file}`" if file else ""
+        lines.append(f"- [[{slug}]] ({score}){file_text} - {reason} - {used_text}")
+    return "\n".join(lines) if lines else ("- 暂无图谱扩展页面。" if language == "zh-CN" else "- No graph-expanded pages.")
+
+
+def render_path_evidence_eval_details(retrieval: object, language: str) -> str:
+    if not isinstance(retrieval, dict):
+        return "- 暂无路径证据。" if language == "zh-CN" else "- No path evidence."
+    paths = retrieval.get("path_evidence", [])
+    if not isinstance(paths, list) or not paths:
+        return "- 暂无路径证据。" if language == "zh-CN" else "- No path evidence."
+    lines: list[str] = []
+    for path in paths:
+        if not isinstance(path, list) or len(path) < 2:
+            continue
+        lines.append("- " + " -> ".join(f"[[{slug}]]" for slug in path))
+    return "\n".join(lines) if lines else ("- 暂无路径证据。" if language == "zh-CN" else "- No path evidence.")
+
+
 def render_answer_eval_report(root: Path, result: dict[str, object]) -> str:
     scores = result["scores"]
     counts = result["counts"]
@@ -2034,12 +2316,15 @@ def render_answer_eval_report(root: Path, result: dict[str, object]) -> str:
     date = str(evaluated_at).split(" ")[0]
     language = str(result.get("language", "en"))
     answer_file = Path(result["answer_file"])
+    retrieval = result.get("retrieval", {})
     warning_lines = render_eval_warnings(warnings, language)
     signal_lines = render_eval_signals(result.get("signals", []), language)
     next_steps = render_answer_eval_next_steps(warnings, language)
     llm_frontmatter = render_llm_frontmatter(result)
     llm_section = render_llm_assisted_section(result, language)
     deterministic_note = render_deterministic_note(result, language)
+    graph_details = render_graph_expanded_eval_details(retrieval, language)
+    path_details = render_path_evidence_eval_details(retrieval, language)
     if language == "zh-CN":
         return f"""---
 title: Answer 质量评估 - {evaluated_at}
@@ -2068,6 +2353,7 @@ Grounding：{scores['grounding']}/100
 来源使用：{scores['source_use']}/100
 覆盖度：{scores['coverage']}/100
 协议遵守：{scores['protocol']}/100
+检索质量：{scores.get('retrieval_quality', '-')}/100
 风险：{risk_label(result['risk'], language)}
 
 ## 范围
@@ -2091,6 +2377,13 @@ Grounding：{scores['grounding']}/100
 - Relevant Pages 数：{counts['relevant_pages']}
 - 已使用的 Relevant Pages 数：{counts['used_relevant_pages']}
 - 明确说明未使用的 Relevant Pages 数：{counts['not_used_relevant_pages']}
+- Retrieval Trace：{'yes' if counts.get('retrieval_trace_available') else 'no'}
+- 检索策略：{retrieval.get('strategy', 'unknown')}
+- 检索复杂度：{retrieval.get('complexity', 'unknown')}
+- 直接命中使用数：{counts.get('retrieval_used_direct_hits', 0)}/{counts.get('retrieval_direct_hits', 0)}
+- 图谱扩展使用数：{counts.get('retrieval_used_graph_expanded', 0)}/{counts.get('retrieval_graph_expanded', 0)}
+- 路径证据数：{counts.get('retrieval_path_evidence', 0)}
+- 检索回退：{retrieval.get('fallback_reason') or 'none'}
 - 答案正文字符数：{counts['answer_chars']}
 
 ## 警告
@@ -2104,6 +2397,25 @@ Grounding：{scores['grounding']}/100
 ## 建议下一步
 
 {next_steps}
+
+## 检索质量
+
+- Query Prompt：`{retrieval.get('prompt_file') or '-'}`
+- Strategy used：{retrieval.get('strategy', 'unknown')}
+- Complexity：{retrieval.get('complexity', 'unknown')}
+- Direct hit usage：{len(retrieval.get('used_direct_hits', []))}/{len(retrieval.get('direct_hits', []))}
+- Graph expansion usage：{len(retrieval.get('used_graph_expanded', []))}/{len(retrieval.get('graph_expanded', []))}
+- Path evidence count：{retrieval.get('path_evidence_count', 0)}
+- Fallback：{retrieval.get('fallback_reason') or 'none'}
+- Retrieval warnings：{', '.join(retrieval.get('warnings', [])) if retrieval.get('warnings') else 'none'}
+
+### Graph-Expanded Pages 明细
+
+{graph_details}
+
+### Path Evidence 明细
+
+{path_details}
 
 {llm_section}
 
@@ -2140,6 +2452,7 @@ Grounding: {scores['grounding']}/100
 Source Use: {scores['source_use']}/100
 Coverage: {scores['coverage']}/100
 Protocol: {scores['protocol']}/100
+Retrieval Quality: {scores.get('retrieval_quality', '-')}/100
 Risk: {result['risk']}
 
 ## Scope
@@ -2163,6 +2476,13 @@ Risk: {result['risk']}
 - Relevant Pages: {counts['relevant_pages']}
 - Used Relevant Pages: {counts['used_relevant_pages']}
 - Explicitly Not Used Relevant Pages: {counts['not_used_relevant_pages']}
+- Retrieval Trace: {'yes' if counts.get('retrieval_trace_available') else 'no'}
+- Retrieval strategy: {retrieval.get('strategy', 'unknown')}
+- Retrieval complexity: {retrieval.get('complexity', 'unknown')}
+- Direct hit usage: {counts.get('retrieval_used_direct_hits', 0)}/{counts.get('retrieval_direct_hits', 0)}
+- Graph expansion usage: {counts.get('retrieval_used_graph_expanded', 0)}/{counts.get('retrieval_graph_expanded', 0)}
+- Path evidence count: {counts.get('retrieval_path_evidence', 0)}
+- Retrieval fallback: {retrieval.get('fallback_reason') or 'none'}
 - Answer body characters: {counts['answer_chars']}
 
 ## Warnings
@@ -2176,6 +2496,25 @@ Risk: {result['risk']}
 ## Suggested Next Steps
 
 {next_steps}
+
+## Retrieval Quality
+
+- Query Prompt: `{retrieval.get('prompt_file') or '-'}`
+- Strategy used: {retrieval.get('strategy', 'unknown')}
+- Complexity: {retrieval.get('complexity', 'unknown')}
+- Direct hit usage: {len(retrieval.get('used_direct_hits', []))}/{len(retrieval.get('direct_hits', []))}
+- Graph expansion usage: {len(retrieval.get('used_graph_expanded', []))}/{len(retrieval.get('graph_expanded', []))}
+- Path evidence count: {retrieval.get('path_evidence_count', 0)}
+- Fallback: {retrieval.get('fallback_reason') or 'none'}
+- Retrieval warnings: {', '.join(retrieval.get('warnings', [])) if retrieval.get('warnings') else 'none'}
+
+### Graph-Expanded Pages Detail
+
+{graph_details}
+
+### Path Evidence Detail
+
+{path_details}
 
 {llm_section}
 
@@ -2423,6 +2762,8 @@ def render_llm_assisted_section(result: dict[str, object], language: str) -> str
     response = str(llm.get("response", "")).strip()
     if not response:
         response = f"- {reason}" if reason else "- No LLM response was produced."
+    source_file = str(llm.get("source_file", "") or "")
+    source_line = f"- Source file: `{source_file}`\n" if source_file else ""
     return f"""
 {heading}
 
@@ -2430,6 +2771,7 @@ def render_llm_assisted_section(result: dict[str, object], language: str) -> str
 - Model: `{model}`
 - Status: `{status}`
 - Evaluated at: {llm.get('evaluated_at', '-')}
+{source_line}
 
 {response}
 """
@@ -2865,7 +3207,7 @@ def graph_report_wiki(target: str) -> None:
     assert_wiki(root)
     graph = build_wiki_graph(root)
     graph_file = write_graph_json(root, graph)
-    report_file = graph_dir(root) / "GRAPH_REPORT.md"
+    report_file = graph_dir(root) / "graph.md"
     report_file.write_text(render_graph_report(graph), encoding="utf-8")
     print(f"Created graph: {graph_file.relative_to(root).as_posix()}")
     print(f"Created graph report: {report_file.relative_to(root).as_posix()}")
@@ -2971,7 +3313,7 @@ def search_wiki(target: str, query: str) -> None:
         print(f"  {page.summary}")
 
 
-def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int]]:
+def find_hits(pages: list[Page], query: str, limit: int, include_relation_boost: bool = True) -> list[tuple[Page, int]]:
     terms = expand_terms(query_terms(query))
     if not terms:
         terms = [term for term in re.split(r"[\s，。？！,.?;:：；、]+", query.lower().strip()) if term]
@@ -2995,20 +3337,197 @@ def find_hits(pages: list[Page], query: str, limit: int) -> list[tuple[Page, int
         if keyword_score > 0 or vector_score >= 0.18:
             raw_scores[page.slug] = keyword_score + (vector_score * 12)
 
-    for page in pages:
-        if direct_scores.get(page.slug, 0) <= 0:
-            continue
-        relation_boost = max(1.0, min(4.0, direct_scores[page.slug] / 4))
-        for linked_slug in page.links:
-            if linked_slug in pages_by_slug:
-                raw_scores[linked_slug] = raw_scores.get(linked_slug, 0.0) + relation_boost
-        for backlink in pages:
-            if page.slug in backlink.links:
-                raw_scores[backlink.slug] = raw_scores.get(backlink.slug, 0.0) + relation_boost
+    if include_relation_boost:
+        for page in pages:
+            if direct_scores.get(page.slug, 0) <= 0:
+                continue
+            relation_boost = max(1.0, min(4.0, direct_scores[page.slug] / 4))
+            for linked_slug in page.links:
+                if linked_slug in pages_by_slug:
+                    raw_scores[linked_slug] = raw_scores.get(linked_slug, 0.0) + relation_boost
+            for backlink in pages:
+                if page.slug in backlink.links:
+                    raw_scores[backlink.slug] = raw_scores.get(backlink.slug, 0.0) + relation_boost
 
     hits = [(pages_by_slug[slug], max(1, round(score))) for slug, score in raw_scores.items() if score > 0]
     hits.sort(key=lambda hit: (-hit[1], hit[0].slug))
     return hits[:limit]
+
+
+def select_retrieval_strategy(question: str, requested: str, direct_hits: list[tuple[Page, int]]) -> tuple[str, str]:
+    mode = (requested or "auto").lower()
+    if mode not in RETRIEVAL_MODES:
+        raise RuntimeError(f"Unsupported retrieval strategy: {requested}. Use one of: {', '.join(sorted(RETRIEVAL_MODES))}")
+    if mode != "auto":
+        complexity = "low" if mode in {"direct", "graph"} else "medium" if mode == "path" else "high"
+        return mode, complexity
+
+    lowered = question.lower()
+    synthesis_terms = r"综合|总结|方案|策略|取舍|评估|对比|比较|tradeoff|strategy|evaluate|compare|synthesis|overall"
+    path_terms = r"机制|流程|路径|关系|为什么|为何|如何|怎么|影响|依赖|适合|核心|区别|原因|mechanism|workflow|process|why|how|relationship|impact|depend|fit|core"
+    if re.search(synthesis_terms, lowered):
+        return "synthesis", "high"
+    if re.search(path_terms, lowered):
+        return "path", "medium"
+    if len(direct_hits) <= 1:
+        return "graph", "medium"
+    top_score = direct_hits[0][1] if direct_hits else 0
+    if top_score >= 8 and len(query_terms(question)) <= 4:
+        return "direct", "low"
+    return "graph", "medium"
+
+
+def graph_neighbor_maps(graph: dict[str, object]) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    incoming: dict[str, set[str]] = {}
+    outgoing: dict[str, set[str]] = {}
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict) or not edge.get("target_exists"):
+            continue
+        source = str(edge["source"])
+        target = str(edge["target"])
+        outgoing.setdefault(source, set()).add(target)
+        incoming.setdefault(target, set()).add(source)
+    return incoming, outgoing
+
+
+def graph_retrieval_hits(
+    root: Path,
+    pages: list[Page],
+    question: str,
+    top_k: int,
+    retrieval: str,
+) -> tuple[list[tuple[Page, int]], dict[str, object]]:
+    direct_hits = find_hits(pages, question, limit=max(top_k, 1), include_relation_boost=False)
+    strategy, complexity = select_retrieval_strategy(question, retrieval, direct_hits)
+    pages_by_slug = {page.slug: page for page in pages}
+    scores: dict[str, int] = {page.slug: score for page, score in direct_hits}
+    direct_slugs = [page.slug for page, _ in direct_hits]
+    expanded: dict[str, dict[str, str]] = {}
+    path_evidence: list[list[str]] = []
+    synthesis_slugs: list[str] = []
+    fallback_from = ""
+    fallback_reason = ""
+
+    graph = build_wiki_graph(root)
+    nodes = graph_nodes_by_id(graph)
+    incoming, outgoing = graph_neighbor_maps(graph)
+
+    def add_page(slug: str, score: int, reason: str, source: str) -> None:
+        if slug not in pages_by_slug or slug in direct_slugs:
+            return
+        scores[slug] = max(scores.get(slug, 0), max(1, score))
+        expanded.setdefault(slug, {"reason": reason, "source": source})
+
+    if strategy in {"graph", "path", "synthesis"}:
+        for page, score in direct_hits[: min(4, len(direct_hits))]:
+            for target in sorted(outgoing.get(page.slug, set()))[:4]:
+                add_page(target, round(score * 0.7), f"outbound neighbor of [[{page.slug}]]", "graph")
+            for source in sorted(incoming.get(page.slug, set()))[:4]:
+                add_page(source, round(score * 0.6), f"inbound neighbor of [[{page.slug}]]", "graph")
+
+    if strategy in {"path", "synthesis"} and len(direct_slugs) >= 2:
+        path_candidates = direct_slugs[: min(4, len(direct_slugs))]
+        for start_index, start in enumerate(path_candidates):
+            for goal in path_candidates[start_index + 1 :]:
+                path = shortest_graph_path(graph, start, goal)
+                if path and len(path) >= 2:
+                    path_evidence.append(path)
+                    if len(path) > 2:
+                        for slug in path[1:-1]:
+                            add_page(slug, max(2, round(scores.get(start, 2) * 0.55)), f"path bridge between [[{start}]] and [[{goal}]]", "path")
+
+    if retrieval == "auto" and strategy == "path" and not path_evidence:
+        fallback_from = "path"
+        fallback_reason = "auto selected path, but no graph path evidence was found; fell back to graph retrieval"
+        strategy = "graph"
+
+    if strategy == "synthesis":
+        for slug in ["overview", "synthesis"]:
+            if slug in pages_by_slug:
+                synthesis_slugs.append(slug)
+                add_page(slug, 3, "global orientation/synthesis page", "synthesis")
+        central_nodes = sorted(nodes.values(), key=lambda node: (-int(node.get("degree", 0)), str(node.get("id", ""))))[:3]
+        for node in central_nodes:
+            slug = str(node.get("id"))
+            if slug in pages_by_slug:
+                synthesis_slugs.append(slug)
+                add_page(slug, 2, f"central graph node with degree {node.get('degree', 0)}", "synthesis")
+
+    final_limit = top_k if strategy == "direct" else top_k + 2
+    ordered_slugs = sorted(scores, key=lambda slug: (-scores[slug], 0 if slug in direct_slugs else 1, slug))[:final_limit]
+    hits = [(pages_by_slug[slug], scores[slug]) for slug in ordered_slugs]
+    trace = {
+        "requested_strategy": retrieval,
+        "strategy": strategy,
+        "complexity": complexity,
+        "fallback_from": fallback_from,
+        "fallback_reason": fallback_reason,
+        "direct_hits": [{"slug": page.slug, "score": score, "file": page.rel} for page, score in direct_hits],
+        "graph_expanded": [
+            {
+                "slug": slug,
+                "score": scores.get(slug, 0),
+                "reason": data["reason"],
+                "source": data["source"],
+                "file": pages_by_slug[slug].rel,
+            }
+            for slug, data in sorted(expanded.items())
+            if slug in ordered_slugs
+        ],
+        "path_evidence": path_evidence,
+        "synthesis_pages": sorted(set(slug for slug in synthesis_slugs if slug in ordered_slugs)),
+        "final_pages": [{"slug": page.slug, "score": score, "file": page.rel} for page, score in hits],
+    }
+    return hits, trace
+
+
+def render_retrieval_trace(trace: dict[str, object]) -> str:
+    direct = trace.get("direct_hits", [])
+    expanded = trace.get("graph_expanded", [])
+    paths = trace.get("path_evidence", [])
+    synthesis_pages = trace.get("synthesis_pages", [])
+    final_pages = trace.get("final_pages", [])
+    fallback_reason = str(trace.get("fallback_reason", "") or "")
+
+    direct_lines = "\n".join(f"- [[{item['slug']}]] ({item['score']}) `{item['file']}`" for item in direct) if direct else "- None"
+    expanded_lines = (
+        "\n".join(f"- [[{item['slug']}]] ({item['score']}) `{item['file']}` - {item['reason']}" for item in expanded)
+        if expanded
+        else "- None"
+    )
+    path_lines = "\n".join("- " + " -> ".join(f"[[{slug}]]" for slug in path) for path in paths) if paths else "- None"
+    synthesis_lines = "\n".join(f"- [[{slug}]]" for slug in synthesis_pages) if synthesis_pages else "- None"
+    final_lines = "\n".join(f"- [[{item['slug']}]] ({item['score']}) `{item['file']}`" for item in final_pages) if final_pages else "- None"
+    return f"""## Retrieval Trace
+
+- Requested strategy: {trace.get('requested_strategy', 'auto')}
+- Strategy used: {trace.get('strategy', 'direct')}
+- Complexity: {trace.get('complexity', 'low')}
+- Direct hit count: {len(direct)}
+- Graph-expanded page count: {len(expanded)}
+- Path evidence count: {len(paths)}
+{f"- Fallback: {fallback_reason}" if fallback_reason else ""}
+
+### Direct Hits
+
+{direct_lines}
+
+### Graph-Expanded Pages
+
+{expanded_lines}
+
+### Path Evidence
+
+{path_lines}
+
+### Synthesis Pages
+
+{synthesis_lines}
+
+### Final Context Pages
+
+{final_lines}
+"""
 
 
 def expand_terms(terms: list[str]) -> list[str]:
@@ -3090,11 +3609,16 @@ def compact_page_context(page: Page, max_chars: int = 3500) -> str:
     return text[:max_chars].rstrip() + "\n\n... [truncated for prompt context]"
 
 
-def create_query_prompt(target: str, question: str, top_k: int = DEFAULT_TOP_K) -> tuple[Path, Path, list[tuple[Page, int]], str, str]:
+def create_query_prompt(
+    target: str,
+    question: str,
+    top_k: int = DEFAULT_TOP_K,
+    retrieval: str = "auto",
+) -> tuple[Path, Path, list[tuple[Page, int]], str, str]:
     root = Path(target).resolve()
     assert_wiki(root)
     pages = collect_pages(root)
-    hits = find_hits(pages, question, limit=top_k)
+    hits, trace = graph_retrieval_hits(root, pages, question, top_k, retrieval)
     date = today()
     slug = slugify(question)
     ensure_dir(root / ".cwiki" / "prompts")
@@ -3128,6 +3652,14 @@ tags: [query, prompt]
 sources: {len(hits)}
 updated: {date}
 status: pending
+retrieval_strategy: {trace.get('strategy', 'direct')}
+retrieval_requested: {trace.get('requested_strategy', retrieval)}
+retrieval_complexity: {trace.get('complexity', 'low')}
+retrieval_direct_hits: {len(trace.get('direct_hits', []))}
+retrieval_graph_expanded: {len(trace.get('graph_expanded', []))}
+retrieval_path_count: {len(trace.get('path_evidence', []))}
+retrieval_fallback_from: {trace.get('fallback_from', '')}
+retrieval_fallback_reason: {trace.get('fallback_reason', '')}
 ---
 
 # Query Prompt - {question}
@@ -3140,33 +3672,38 @@ status: pending
 
 {relevant_pages}
 
+{render_retrieval_trace(trace)}
+
 ## Instructions For The Agent
 
 1. Read `CLAUDE.md` and `WIKI_SCHEMA.md`.
 2. Read `wiki/index.md`.
 3. Read the relevant pages below in full from disk before answering.
 4. Treat this prompt as the reproducible evidence boundary. If the context pack is enough, answer directly from it.
-5. If the context pack looks incomplete, use the hybrid agent workflow: search or inspect `wiki/index.md`, read additional high-signal wiki pages, and follow one level of useful `[[wikilinks]]`.
-6. If the question needs current web evidence, do not guess from memory. Use `cwiki web-ask . "<question>"` or `wiki-agent-browser`, then cite opened sources with URLs and access dates.
-7. Use this output structure: `## Evidence Used`, `## Answer`, `## Gaps`.
-8. In `## Evidence Used`, list every Relevant Page. For each page, write either `- [[slug]] - used - source: raw/...` or `- [[slug]] - not used - reason: ...`. Also list any extra wiki pages or web sources found during hybrid exploration.
-9. In `## Answer`, cite the wiki pages you actually use with local citations like `[[slug]]`, and keep source paths or URLs near factual claims.
-10. Use the relevant pages that materially support the answer. If a listed Relevant Page is not useful, mention that in `## Gaps`.
-11. Always include a `## Gaps` section. State missing evidence, weak coverage, unused relevant pages, hybrid exploration limits, or other limitations. If no gaps are known, write that explicitly.
-12. If the answer is valuable, offer to save it into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
-13. If saved, run `cwiki index .` and append to `wiki/log.md`.
+5. Read Retrieval Trace as the layered retrieval contract: Direct Hits are primary evidence; Graph-Expanded Pages are nearby graph context; Path Evidence explains relationships; Final Context Pages are the bounded context pack.
+6. If Strategy used is `graph`, use graph-expanded pages only when they materially support the answer; otherwise mark them `not used - reason`.
+7. If Strategy used is `path`, explicitly check Path Evidence. If it is missing or weak, fall back mentally to graph/direct evidence and state that limitation in `## Gaps`.
+8. If the context pack looks incomplete, use the hybrid agent workflow: search or inspect `wiki/index.md`, read additional high-signal wiki pages, and follow one level of useful `[[wikilinks]]`.
+9. If the question needs current web evidence, do not guess from memory. Use `cwiki web-ask . "<question>"` or `wiki-agent-browser`, then cite opened sources with URLs and access dates.
+10. Use this output structure: `## Evidence Used`, `## Answer`, `## Gaps`.
+11. In `## Evidence Used`, list every Relevant Page. For each page, write either `- [[slug]] - used - source: raw/...` or `- [[slug]] - not used - reason: ...`. Also list any extra wiki pages or web sources found during hybrid exploration.
+12. In `## Answer`, cite the wiki pages you actually use with local citations like `[[slug]]`, and keep source paths or URLs near factual claims.
+13. Use the relevant pages that materially support the answer. If a listed Relevant Page is not useful, mention that in `## Gaps`.
+14. Always include a `## Gaps` section. State missing evidence, weak coverage, unused relevant pages, hybrid exploration limits, or other limitations. If no gaps are known, write that explicitly.
+15. If the answer is valuable, offer to save it into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+16. If saved, run `cwiki index .` and append to `wiki/log.md`.
 
 ## Context Pack
 
 {context_sections}
 """
     prompt_file.write_text(prompt, encoding="utf-8")
-    brief = render_human_brief(question, hits)
+    brief = render_human_brief(question, hits, trace)
     brief_file.write_text(brief, encoding="utf-8")
     return prompt_file, brief_file, hits, prompt, brief
 
 
-def render_human_brief(question: str, hits: list[tuple[Page, int]]) -> str:
+def render_human_brief(question: str, hits: list[tuple[Page, int]], trace: dict[str, object] | None = None) -> str:
     date = today()
     chinese = contains_chinese(question) or any(contains_chinese(page.text) for page, _ in hits)
     if not hits:
@@ -3204,6 +3741,30 @@ No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/i
     open_questions = "\n".join(extract_section_bullet(page, "Open Questions") for page, _ in hits)
     if not open_questions:
         open_questions = "\n".join(extract_section_bullet(page, "开放问题") for page, _ in hits)
+    trace_zh = ""
+    trace_en = ""
+    if trace:
+        fallback_reason = str(trace.get("fallback_reason", "") or "")
+        fallback_zh = f"- 回退：{fallback_reason}\n" if fallback_reason else ""
+        fallback_en = f"- Fallback: {fallback_reason}\n" if fallback_reason else ""
+        trace_zh = f"""
+## 检索轨迹
+
+- 策略：{trace.get('strategy', 'direct')}
+- 复杂度：{trace.get('complexity', 'low')}
+- 直接命中：{len(trace.get('direct_hits', []))}
+- 图谱扩展：{len(trace.get('graph_expanded', []))}
+- 路径证据：{len(trace.get('path_evidence', []))}
+{fallback_zh}"""
+        trace_en = f"""
+## Retrieval Trace
+
+- Strategy: {trace.get('strategy', 'direct')}
+- Complexity: {trace.get('complexity', 'low')}
+- Direct hits: {len(trace.get('direct_hits', []))}
+- Graph-expanded pages: {len(trace.get('graph_expanded', []))}
+- Path evidence: {len(trace.get('path_evidence', []))}
+{fallback_en}"""
 
     if chinese:
         return f"""---
@@ -3229,6 +3790,7 @@ wiki 中有 {len(hits)} 个相关页面。建议先读 {', '.join(f'[[{page.slug
 ## 相关页面
 
 {relevant_pages}
+{trace_zh}
 
 ## 关键声明
 
@@ -3270,6 +3832,7 @@ The wiki has relevant material in {len(hits)} page(s). Start with {', '.join(f'[
 ## Relevant Pages
 
 {relevant_pages}
+{trace_en}
 
 ## Key Claims
 
@@ -3326,9 +3889,9 @@ def extract_section_bullet(page: Page, heading: str, max_chars: int = 420) -> st
     return f"- [[{page.slug}]]: {body[:max_chars]}"
 
 
-def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False) -> None:
+def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False, retrieval: str = "auto") -> None:
     root = Path(target).resolve()
-    prompt_file, brief_file, hits, prompt, brief = create_query_prompt(target, question, top_k)
+    prompt_file, brief_file, hits, prompt, brief = create_query_prompt(target, question, top_k, retrieval)
     print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
     print(f"Created human brief: {brief_file.relative_to(root).as_posix()}")
     if hits:
@@ -3756,6 +4319,7 @@ def answer_wiki(
     target: str,
     question: str,
     top_k: int,
+    retrieval: str,
     provider: str,
     model: str | None,
     api_key_env: str | None,
@@ -3772,7 +4336,7 @@ def answer_wiki(
     if provider not in {"openai", "glm"}:
         raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai, glm")
 
-    prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(target, question, top_k)
+    prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(target, question, top_k, retrieval)
     api_key = os.environ.get(api_key_env)
     if not api_key:
         print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
@@ -4366,6 +4930,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--api-key-env", default=None)
     eval_parser.add_argument("--base-url", default=None)
     eval_parser.add_argument("--max-output-tokens", type=int, default=1000)
+    eval_parser.add_argument("--agent-eval-file", default=None, help="Attach a Markdown LLM-assisted evaluation written by the current agent platform")
+    eval_parser.add_argument("--agent-model", default=None, help="Model label to record for --agent-eval-file")
 
     eval_answer_parser = subparsers.add_parser("eval-answer", help="Evaluate answer quality")
     eval_answer_parser.add_argument("dir")
@@ -4379,6 +4945,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_answer_parser.add_argument("--api-key-env", default=None)
     eval_answer_parser.add_argument("--base-url", default=None)
     eval_answer_parser.add_argument("--max-output-tokens", type=int, default=1000)
+    eval_answer_parser.add_argument("--agent-eval-file", default=None, help="Attach a Markdown LLM-assisted evaluation written by the current agent platform")
+    eval_answer_parser.add_argument("--agent-model", default=None, help="Model label to record for --agent-eval-file")
 
     eval_all_parser = subparsers.add_parser("eval-all", help="Evaluate wiki quality and optional answer quality")
     eval_all_parser.add_argument("dir")
@@ -4393,6 +4961,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_all_parser.add_argument("--api-key-env", default=None)
     eval_all_parser.add_argument("--base-url", default=None)
     eval_all_parser.add_argument("--max-output-tokens", type=int, default=1000)
+    eval_all_parser.add_argument("--agent-eval-file", default=None, help="Attach a Markdown LLM-assisted evaluation written by the current agent platform")
+    eval_all_parser.add_argument("--agent-model", default=None, help="Model label to record for --agent-eval-file")
 
     eval_schedule_parser = subparsers.add_parser("eval-schedule", help="Configure or run scheduled combined evaluation")
     eval_schedule_parser.add_argument("dir")
@@ -4412,7 +4982,7 @@ def build_parser() -> argparse.ArgumentParser:
     graph_parser = subparsers.add_parser("graph", help="Generate .cwiki/graph/graph.json from wiki links")
     graph_parser.add_argument("dir")
 
-    graph_report_parser = subparsers.add_parser("graph-report", help="Generate graph.json and GRAPH_REPORT.md")
+    graph_report_parser = subparsers.add_parser("graph-report", help="Generate graph.json and graph.md")
     graph_report_parser.add_argument("dir")
 
     path_parser = subparsers.add_parser("path", help="Find the shortest wikilink path between two wiki pages")
@@ -4432,6 +5002,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("dir")
     ask_parser.add_argument("question", nargs="+")
     ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    ask_parser.add_argument("--retrieval", choices=sorted(RETRIEVAL_MODES), default="auto")
     ask_parser.add_argument("--show-context", action="store_true")
 
     web_ask_parser = subparsers.add_parser(
@@ -4451,6 +5022,7 @@ def build_parser() -> argparse.ArgumentParser:
     answer_parser.add_argument("dir")
     answer_parser.add_argument("question", nargs="+")
     answer_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    answer_parser.add_argument("--retrieval", choices=sorted(RETRIEVAL_MODES), default="auto")
     answer_parser.add_argument("--provider", default=None)
     answer_parser.add_argument("--model", default=None)
     answer_parser.add_argument("--api-key-env", default=None)
@@ -4480,11 +5052,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "lint":
             return lint_wiki(args.dir)
         elif args.command == "eval":
-            eval_wiki(args.dir, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens)
+            eval_wiki(args.dir, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
         elif args.command == "eval-answer":
-            eval_answer(args.dir, args.answer_file, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens)
+            eval_answer(args.dir, args.answer_file, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
         elif args.command == "eval-all":
-            eval_all(args.dir, args.answer, args.output, args.no_write, args.json, args.wiki_only, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens)
+            eval_all(args.dir, args.answer, args.output, args.no_write, args.json, args.wiki_only, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
         elif args.command == "eval-schedule":
             configure_eval_schedule(
                 args.dir,
@@ -4512,7 +5084,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":
-            ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context)
+            ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context, args.retrieval)
         elif args.command == "web-ask":
             web_ask_wiki(
                 args.dir,
@@ -4529,6 +5101,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.dir,
                 " ".join(args.question),
                 args.top_k,
+                args.retrieval,
                 args.provider,
                 args.model,
                 args.api_key_env,
