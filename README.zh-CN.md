@@ -87,7 +87,9 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 ├── bin/cwiki.mjs             Node/npm 兼容包装器
 ├── templates/                初始化 wiki 时复制的模板
 │   ├── AGENTS.md
+│   ├── AGENTS.zh-CN.md
 │   ├── CLAUDE.md
+│   ├── CLAUDE.zh-CN.md
 │   ├── WIKI_SCHEMA.md
 │   ├── .claude/skills/       canonical skill 定义
 │   └── .agents/skills/       兼容其他 agent 的入口
@@ -121,7 +123,7 @@ cd my-wiki
 python3 ../bin/cwiki.py lint .
 ```
 
-这会创建 `raw/`、`wiki/`、`.cwiki/prompts/`、`CLAUDE.md`、`AGENTS.md`、`WIKI_SCHEMA.md`、`.env.example` 和 workflow skills。
+这会创建 `raw/`、`wiki/`、`.cwiki/prompts/`、`CLAUDE.md`、`CLAUDE.zh-CN.md`、`AGENTS.md`、`AGENTS.zh-CN.md`、`WIKI_SCHEMA.md`、`.env.example` 和 workflow skills。
 
 ### 3. 添加资料
 
@@ -347,7 +349,7 @@ status: active
 6. ingest 或保存分析后运行 `cwiki index .`。
 7. 每隔几次 ingest 运行 `cwiki lint .`，处理断链、孤页和过期声明。
 
-初始化后的 wiki 会同时生成 `CLAUDE.md`、`AGENTS.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议。
+初始化后的 wiki 会同时生成 `CLAUDE.md`、`CLAUDE.zh-CN.md`、`AGENTS.md`、`AGENTS.zh-CN.md` 和 `WIKI_SCHEMA.md`。`CLAUDE.md` 是给 Claude Code 这类智能体看的强入口文件，`AGENTS.md` 是更通用的 agent 入口，`WIKI_SCHEMA.md` 是详细的 wiki 结构协议；两个 `.zh-CN.md` 文件是独立中文版入口，方便中文 agent 平台直接读取。
 
 同时会生成 `wiki-init`、`wiki-capture`、`wiki-parse-docx`、`wiki-parse-pdf`、`wiki-parse-image`、`wiki-parse-pptx`、`wiki-parse-xlsx`、`wiki-ingest`、`wiki-query`、`wiki-agent-browser`、`wiki-update`、`wiki-lint` 等技能：`.claude/skills/` 里放 canonical 定义，`.agents/skills/` 里放兼容入口。
 

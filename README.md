@@ -90,7 +90,9 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 ├── bin/cwiki.mjs             Node/npm compatibility wrapper
 ├── templates/                Files copied into a new wiki
 │   ├── AGENTS.md
+│   ├── AGENTS.zh-CN.md
 │   ├── CLAUDE.md
+│   ├── CLAUDE.zh-CN.md
 │   ├── WIKI_SCHEMA.md
 │   ├── .claude/skills/       Canonical skill definitions
 │   └── .agents/skills/       Compatibility skill entrypoints
@@ -126,7 +128,7 @@ cd my-wiki
 python3 ../bin/cwiki.py lint .
 ```
 
-This creates a wiki with `raw/`, `wiki/`, `.cwiki/prompts/`, `CLAUDE.md`, `AGENTS.md`, `WIKI_SCHEMA.md`, `.env.example`, and workflow skills.
+This creates a wiki with `raw/`, `wiki/`, `.cwiki/prompts/`, `CLAUDE.md`, `CLAUDE.zh-CN.md`, `AGENTS.md`, `AGENTS.zh-CN.md`, `WIKI_SCHEMA.md`, `.env.example`, and workflow skills.
 
 ### 3. Add Sources
 
@@ -361,7 +363,7 @@ The claim ledger is the main difference from lighter templates. It makes the wik
 6. After ingesting or saving an analysis, run `cwiki index .`.
 7. After several ingests, run `cwiki lint .` and fix broken links, stale claims, and orphan pages.
 
-`CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract.
+`CLAUDE.md` is generated for Claude Code and other agents that look for a root instruction file. `AGENTS.md` is the tool-agnostic entrypoint, and `WIKI_SCHEMA.md` is the detailed wiki contract. Chinese standalone versions are generated as `CLAUDE.zh-CN.md` and `AGENTS.zh-CN.md`.
 
 The generated wiki also includes `wiki-init`, `wiki-capture`, `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, `wiki-parse-xlsx`, `wiki-ingest`, `wiki-query`, `wiki-agent-browser`, `wiki-update`, and `wiki-lint` skills under `.claude/skills/`, plus compatibility entrypoints under `.agents/skills/`.
 

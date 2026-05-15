@@ -390,12 +390,13 @@ def init_wiki(target: str, domain: str | None) -> None:
     )
 
     replacements = {"{{domain}}": wiki_domain, "{{date}}": date}
-    for template_name in ["WIKI_SCHEMA.md", "CLAUDE.md"]:
+    for template_name in ["WIKI_SCHEMA.md", "CLAUDE.md", "CLAUDE.zh-CN.md"]:
         content = (TEMPLATE_ROOT / template_name).read_text(encoding="utf-8")
         for key, value in replacements.items():
             content = content.replace(key, value)
         write_if_missing(root / template_name, content)
     write_if_missing(root / "AGENTS.md", (TEMPLATE_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    write_if_missing(root / "AGENTS.zh-CN.md", (TEMPLATE_ROOT / "AGENTS.zh-CN.md").read_text(encoding="utf-8"))
     write_if_missing(root / ".env.example", env_example_content())
 
     copy_skills(root)
@@ -414,7 +415,7 @@ Format: `## [YYYY-MM-DD] operation | title`
 
 ## [{date}] init | {wiki_domain}
 - Created wiki structure
-- Created CLAUDE.md, WIKI_SCHEMA.md, and AGENTS.md
+- Created CLAUDE.md, CLAUDE.zh-CN.md, WIKI_SCHEMA.md, AGENTS.md, and AGENTS.zh-CN.md
 - Created .env.example for local model and web-search defaults
 - Initialized index and log
 """,
