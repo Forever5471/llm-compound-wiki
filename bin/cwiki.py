@@ -382,6 +382,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             ".cwiki/answers/**\n"
             ".cwiki/web-research/**\n"
             ".cwiki/eval/**\n"
+            ".cwiki/graph/**\n"
             ".env\n"
             ".DS_Store\n"
         ),
@@ -2576,6 +2577,387 @@ def update_eval_index(root: Path, report_file: Path, result: dict[str, object]) 
         handle.write(row)
 
 
+def parse_tags(value: str) -> list[str]:
+    stripped = (value or "").strip()
+    if not stripped:
+        return []
+    if stripped.startswith("[") and stripped.endswith("]"):
+        stripped = stripped[1:-1]
+    tags = []
+    for item in stripped.split(","):
+        tag = clean_quoted(item.strip())
+        if tag:
+            tags.append(tag)
+    return tags
+
+
+def parse_int(value: str, default: int = 0) -> int:
+    try:
+        return int(clean_quoted(value or ""))
+    except ValueError:
+        return default
+
+
+def extract_claim_sources(page: Page) -> list[str]:
+    lines = page.text.splitlines()
+    in_ledger = False
+    sources: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_ledger = stripped.lower() in {"## claim ledger", "## 声明台账", "## 事实台账"}
+            continue
+        if not in_ledger or not stripped.startswith("|") or stripped.startswith("|---"):
+            continue
+        cells = [cell.strip().strip("`") for cell in stripped.strip("|").split("|")]
+        if len(cells) < 2 or cells[0].lower() in {"claim", "声明"}:
+            continue
+        source = cells[1].strip()
+        if not source or source in {"-", "source", "来源"}:
+            continue
+        if source not in seen:
+            seen.add(source)
+            sources.append(source)
+    return sources
+
+
+def build_wiki_graph(root: Path) -> dict[str, object]:
+    pages = collect_pages(root)
+    pages_by_slug = {page.slug: page for page in pages}
+    inbound: dict[str, int] = {page.slug: 0 for page in pages}
+    outbound: dict[str, int] = {page.slug: 0 for page in pages}
+    edges: list[dict[str, object]] = []
+
+    for page in pages:
+        link_counts: dict[str, int] = {}
+        for target in page.links:
+            if target == page.slug:
+                continue
+            link_counts[target] = link_counts.get(target, 0) + 1
+        for target, mentions in sorted(link_counts.items()):
+            target_exists = target in pages_by_slug
+            outbound[page.slug] += 1
+            if target_exists:
+                inbound[target] += 1
+            edges.append(
+                {
+                    "source": page.slug,
+                    "target": target,
+                    "type": "WIKILINK",
+                    "source_file": page.rel,
+                    "target_exists": target_exists,
+                    "confidence": "high" if target_exists else "broken",
+                    "evidence": f"[[{target}]]",
+                    "mentions": mentions,
+                }
+            )
+
+    nodes = []
+    for page in pages:
+        frontmatter = parse_frontmatter(page.text)
+        claim_sources = extract_claim_sources(page)
+        nodes.append(
+            {
+                "id": page.slug,
+                "title": page.title,
+                "kind": page.kind,
+                "section": page.section,
+                "file": page.rel,
+                "tags": parse_tags(page.tags),
+                "updated": clean_quoted(page.updated),
+                "status": clean_quoted(page.status),
+                "summary": page.summary,
+                "source_count": parse_int(frontmatter.get("sources", ""), len(claim_sources)),
+                "claim_sources": claim_sources,
+                "in_degree": inbound[page.slug],
+                "out_degree": outbound[page.slug],
+                "degree": inbound[page.slug] + outbound[page.slug],
+            }
+        )
+
+    broken_edges = [edge for edge in edges if not edge["target_exists"]]
+    isolated = [node["id"] for node in nodes if node["degree"] == 0]
+    no_inbound = [node["id"] for node in nodes if node["in_degree"] == 0 and node["id"] not in {"overview", "synthesis"}]
+    cross_section_edges = [
+        edge
+        for edge in edges
+        if edge["target_exists"]
+        and pages_by_slug[str(edge["source"])].section != pages_by_slug[str(edge["target"])].section
+    ]
+
+    return {
+        "schema_version": "0.1",
+        "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "target": root.as_posix(),
+        "nodes": sorted(nodes, key=lambda node: str(node["id"])),
+        "edges": sorted(edges, key=lambda edge: (str(edge["source"]), str(edge["target"]))),
+        "stats": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "broken_edge_count": len(broken_edges),
+            "isolated_node_count": len(isolated),
+            "no_inbound_count": len(no_inbound),
+            "cross_section_edge_count": len(cross_section_edges),
+        },
+    }
+
+
+def graph_dir(root: Path) -> Path:
+    return root / ".cwiki" / "graph"
+
+
+def write_graph_json(root: Path, graph: dict[str, object]) -> Path:
+    output_dir = graph_dir(root)
+    ensure_dir(output_dir)
+    output_file = output_dir / "graph.json"
+    output_file.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output_file
+
+
+def graph_nodes_by_id(graph: dict[str, object]) -> dict[str, dict[str, object]]:
+    nodes = graph.get("nodes", [])
+    return {str(node["id"]): node for node in nodes if isinstance(node, dict) and "id" in node}
+
+
+def graph_language(graph: dict[str, object]) -> str:
+    nodes = graph.get("nodes", [])
+    sample = "\n".join(str(node.get("title", "")) + "\n" + str(node.get("summary", "")) for node in nodes if isinstance(node, dict))
+    return "zh" if contains_chinese(sample) else "en"
+
+
+def render_graph_report(graph: dict[str, object]) -> str:
+    language = graph_language(graph)
+    nodes = graph_nodes_by_id(graph)
+    edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+    stats = graph.get("stats", {})
+    top_nodes = sorted(nodes.values(), key=lambda node: (-int(node.get("degree", 0)), str(node.get("id", ""))))[:10]
+    broken_edges = [edge for edge in edges if not edge.get("target_exists")]
+    isolated = [node for node in nodes.values() if int(node.get("degree", 0)) == 0]
+    cross_section_edges = [
+        edge
+        for edge in edges
+        if edge.get("target_exists")
+        and nodes[str(edge["source"])]["section"] != nodes[str(edge["target"])]["section"]
+    ][:20]
+
+    top_rows = "\n".join(
+        f"| [[{node['id']}]] | {escape_cell(str(node.get('title', '')))} | {node.get('kind', '-')} | "
+        f"{node.get('in_degree', 0)} | {node.get('out_degree', 0)} | {node.get('degree', 0)} |"
+        for node in top_nodes
+    ) or "| - | - | - | - | - | - |"
+    broken_rows = "\n".join(
+        f"- [[{edge['source']}]] -> [[{edge['target']}]] (`{edge['source_file']}`)"
+        for edge in broken_edges[:30]
+    ) or "- None"
+    isolated_rows = "\n".join(f"- [[{node['id']}]] `{node.get('file', '')}`" for node in isolated[:30]) or "- None"
+    cross_rows = "\n".join(
+        f"- [[{edge['source']}]] ({nodes[str(edge['source'])]['section']}) -> "
+        f"[[{edge['target']}]] ({nodes[str(edge['target'])]['section']})"
+        for edge in cross_section_edges
+    ) or "- None"
+
+    if language == "zh":
+        return f"""---
+title: Wiki 图谱报告
+tags: [graph, report]
+updated: {today()}
+status: generated
+---
+
+# Wiki 图谱报告
+
+## 概览
+
+- 节点数：{stats.get('node_count', 0)}
+- 边数：{stats.get('edge_count', 0)}
+- 断链数：{stats.get('broken_edge_count', 0)}
+- 孤立节点数：{stats.get('isolated_node_count', 0)}
+- 跨分区连接数：{stats.get('cross_section_edge_count', 0)}
+- 生成时间：{graph.get('generated_at', '-')}
+
+## 中心页面
+
+| Page | Title | Kind | In | Out | Degree |
+|---|---|---|---:|---:|---:|
+{top_rows}
+
+## 断链
+
+{broken_rows}
+
+## 孤立页面
+
+{isolated_rows}
+
+## 跨分区连接
+
+{cross_rows}
+
+## 建议问题
+
+- 哪些中心页面应该更新 `overview.md` 或 `synthesis.md`？
+- 哪些孤立页面需要补充 `[[wikilink]]`？
+- 哪些断链应该创建新页面或修正 slug？
+- 哪些跨分区连接代表了值得沉淀的综合主题？
+"""
+
+    return f"""---
+title: Wiki Graph Report
+tags: [graph, report]
+updated: {today()}
+status: generated
+---
+
+# Wiki Graph Report
+
+## Overview
+
+- Nodes: {stats.get('node_count', 0)}
+- Edges: {stats.get('edge_count', 0)}
+- Broken edges: {stats.get('broken_edge_count', 0)}
+- Isolated nodes: {stats.get('isolated_node_count', 0)}
+- Cross-section edges: {stats.get('cross_section_edge_count', 0)}
+- Generated at: {graph.get('generated_at', '-')}
+
+## Central Pages
+
+| Page | Title | Kind | In | Out | Degree |
+|---|---|---|---:|---:|---:|
+{top_rows}
+
+## Broken Links
+
+{broken_rows}
+
+## Isolated Pages
+
+{isolated_rows}
+
+## Cross-Section Edges
+
+{cross_rows}
+
+## Suggested Questions
+
+- Which central pages should update `overview.md` or `synthesis.md`?
+- Which isolated pages need more `[[wikilinks]]`?
+- Which broken links should become new pages or corrected slugs?
+- Which cross-section links reveal useful synthesis topics?
+"""
+
+
+def graph_wiki(target: str) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    graph = build_wiki_graph(root)
+    output_file = write_graph_json(root, graph)
+    stats = graph["stats"]
+    print(f"Created graph: {output_file.relative_to(root).as_posix()}")
+    print(
+        f"Nodes: {stats['node_count']} | Edges: {stats['edge_count']} | "
+        f"Broken: {stats['broken_edge_count']} | Isolated: {stats['isolated_node_count']}"
+    )
+
+
+def graph_report_wiki(target: str) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    graph = build_wiki_graph(root)
+    graph_file = write_graph_json(root, graph)
+    report_file = graph_dir(root) / "GRAPH_REPORT.md"
+    report_file.write_text(render_graph_report(graph), encoding="utf-8")
+    print(f"Created graph: {graph_file.relative_to(root).as_posix()}")
+    print(f"Created graph report: {report_file.relative_to(root).as_posix()}")
+
+
+def resolve_graph_slug(value: str, nodes: dict[str, dict[str, object]]) -> str:
+    if value in nodes:
+        return value
+    slug = slugify(value)
+    if slug in nodes:
+        return slug
+    lowered = value.lower()
+    for node_id, node in nodes.items():
+        if str(node.get("title", "")).lower() == lowered:
+            return node_id
+    raise RuntimeError(f"Unknown graph node: {value}")
+
+
+def graph_adjacency(graph: dict[str, object]) -> dict[str, set[str]]:
+    nodes = graph_nodes_by_id(graph)
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in nodes}
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict) or not edge.get("target_exists"):
+            continue
+        source = str(edge["source"])
+        target = str(edge["target"])
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+    return adjacency
+
+
+def shortest_graph_path(graph: dict[str, object], start: str, goal: str) -> list[str]:
+    adjacency = graph_adjacency(graph)
+    if start == goal:
+        return [start]
+    queue: list[list[str]] = [[start]]
+    seen = {start}
+    for path in queue:
+        current = path[-1]
+        for neighbor in sorted(adjacency.get(current, set())):
+            if neighbor in seen:
+                continue
+            next_path = [*path, neighbor]
+            if neighbor == goal:
+                return next_path
+            seen.add(neighbor)
+            queue.append(next_path)
+    return []
+
+
+def path_wiki(target: str, source: str, target_slug: str) -> int:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    graph = build_wiki_graph(root)
+    nodes = graph_nodes_by_id(graph)
+    start = resolve_graph_slug(source, nodes)
+    goal = resolve_graph_slug(target_slug, nodes)
+    path = shortest_graph_path(graph, start, goal)
+    if not path:
+        print(f"No graph path found between [[{start}]] and [[{goal}]].")
+        return 1
+    print(" -> ".join(f"[[{slug}]]" for slug in path))
+    return 0
+
+
+def explain_wiki_node(target: str, slug_value: str) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    graph = build_wiki_graph(root)
+    nodes = graph_nodes_by_id(graph)
+    slug = resolve_graph_slug(slug_value, nodes)
+    node = nodes[slug]
+    edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+    outgoing = [str(edge["target"]) for edge in edges if edge.get("source") == slug]
+    incoming = [str(edge["source"]) for edge in edges if edge.get("target") == slug and edge.get("target_exists")]
+
+    print(f"# [[{slug}]] — {node.get('title', slug)}")
+    print(f"- File: `{node.get('file', '-')}`")
+    print(f"- Kind: `{node.get('kind', '-')}`")
+    print(f"- Section: `{node.get('section', '-')}`")
+    print(f"- Updated: {node.get('updated') or '-'}")
+    print(f"- Degree: {node.get('degree', 0)} (in {node.get('in_degree', 0)}, out {node.get('out_degree', 0)})")
+    print(f"- Summary: {node.get('summary', '-')}")
+    print("\n## Outgoing Links")
+    print("\n".join(f"- [[{item}]]" for item in outgoing) or "- None")
+    print("\n## Incoming Links")
+    print("\n".join(f"- [[{item}]]" for item in incoming) or "- None")
+    print("\n## Claim Sources")
+    claim_sources = node.get("claim_sources", [])
+    print("\n".join(f"- `{source}`" for source in claim_sources) if claim_sources else "- None")
+
+
 def search_wiki(target: str, query: str) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
@@ -3955,6 +4337,8 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki eval-answer . .cwiki/answers/answer-example.md
   cwiki eval-all . --json
   cwiki eval-schedule . --every-days 7 --llm
+  cwiki graph-report .
+  cwiki path . retrieval synthesis
   cwiki search . "retrieval"
   cwiki lint .
 """,
@@ -4024,6 +4408,21 @@ def build_parser() -> argparse.ArgumentParser:
     eval_schedule_parser.add_argument("--api-key-env", default=None)
     eval_schedule_parser.add_argument("--base-url", default=None)
     eval_schedule_parser.add_argument("--max-output-tokens", type=int, default=1000)
+
+    graph_parser = subparsers.add_parser("graph", help="Generate .cwiki/graph/graph.json from wiki links")
+    graph_parser.add_argument("dir")
+
+    graph_report_parser = subparsers.add_parser("graph-report", help="Generate graph.json and GRAPH_REPORT.md")
+    graph_report_parser.add_argument("dir")
+
+    path_parser = subparsers.add_parser("path", help="Find the shortest wikilink path between two wiki pages")
+    path_parser.add_argument("dir")
+    path_parser.add_argument("source")
+    path_parser.add_argument("target")
+
+    explain_parser = subparsers.add_parser("explain", help="Explain one wiki page as a graph node")
+    explain_parser.add_argument("dir")
+    explain_parser.add_argument("slug")
 
     search_parser = subparsers.add_parser("search", help="Search wiki pages")
     search_parser.add_argument("dir")
@@ -4102,6 +4501,14 @@ def main(argv: list[str] | None = None) -> int:
                 args.base_url,
                 args.max_output_tokens,
             )
+        elif args.command == "graph":
+            graph_wiki(args.dir)
+        elif args.command == "graph-report":
+            graph_report_wiki(args.dir)
+        elif args.command == "path":
+            return path_wiki(args.dir, args.source, args.target)
+        elif args.command == "explain":
+            explain_wiki_node(args.dir, args.slug)
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":

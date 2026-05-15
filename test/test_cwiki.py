@@ -48,6 +48,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
+            self.assertIn(".cwiki/graph/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -148,6 +149,73 @@ updated: 2026-05-08
             self.assertIn("[[rag-vs-llm-wiki]]", index)
             self.assertIn("Concept Pages", index)
             self.assertIn("Comparisons", index)
+
+    def test_graph_commands_create_report_path_and_node_explanation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Graph test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval links to [[retrieval]], [[synthesis]], and [[missing-page]].
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. | raw/captures/source.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "reranking.md").write_text(
+                """---
+title: Reranking
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Reranking
+
+Reranking links to [[retrieval]].
+""",
+                encoding="utf-8",
+            )
+
+            graph_result = run_cwiki("graph", str(root))
+            self.assertIn("Created graph:", graph_result.stdout)
+            graph_file = root / ".cwiki" / "graph" / "graph.json"
+            graph = json.loads(graph_file.read_text(encoding="utf-8"))
+            self.assertEqual(graph["stats"]["node_count"], 4)
+            self.assertEqual(graph["stats"]["broken_edge_count"], 1)
+            self.assertFalse(any(edge["source"] == edge["target"] for edge in graph["edges"]))
+            retrieval = next(node for node in graph["nodes"] if node["id"] == "retrieval")
+            self.assertIn("raw/captures/source.md", retrieval["claim_sources"])
+
+            report_result = run_cwiki("graph-report", str(root))
+            self.assertIn("Created graph report:", report_result.stdout)
+            report = (root / ".cwiki" / "graph" / "GRAPH_REPORT.md").read_text(encoding="utf-8")
+            self.assertIn("Broken Links", report)
+            self.assertIn("[[retrieval]] -> [[missing-page]]", report)
+
+            path_result = run_cwiki("path", str(root), "reranking", "synthesis")
+            self.assertIn("[[reranking]] -> [[retrieval]] -> [[synthesis]]", path_result.stdout)
+
+            explain_result = run_cwiki("explain", str(root), "retrieval")
+            self.assertIn("# [[retrieval]]", explain_result.stdout)
+            self.assertIn("[[reranking]]", explain_result.stdout)
+            self.assertIn("raw/captures/source.md", explain_result.stdout)
 
     def test_lint_reports_broken_links(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -525,7 +593,7 @@ The wiki does not yet compare retrieval strategies.
             deterministic = payload["deterministic"]
             self.assertEqual(deterministic["answer_selection"]["mode"], "latest")
             self.assertEqual(deterministic["answer_selection"]["selected"], ".cwiki/answers/answer-2026-05-11-latest.md")
-            self.assertEqual(deterministic["answer_file"], latest_answer.as_posix())
+            self.assertEqual(Path(deterministic["answer_file"]).resolve(), latest_answer.resolve())
             self.assertIsNotNone(deterministic["scores"]["answer_quality"])
 
     def test_eval_all_json_supports_wiki_only(self) -> None:

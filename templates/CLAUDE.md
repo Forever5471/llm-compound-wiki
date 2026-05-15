@@ -34,6 +34,7 @@ Canonical skills live under `.claude/skills/`. Use them when a workflow matches.
 ## Execution Model
 
 - The CLI is the scaffold and local utility layer: initialize, capture, index, lint, search, and generate prompts or briefs.
+- `graph` and `graph-report` create a deterministic graph layer from compiled wiki pages and `[[wikilinks]]`.
 - Agent intelligence runs in the current agent platform. Use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
 - Local skills are instructions for agents, not executable CLI plugins.
 - `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
@@ -69,6 +70,7 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 - For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask` for a stable prompt and evidence brief, then let the agent inspect additional wiki pages only when the prompt is incomplete.
 - If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
 - If the user asks for web evidence, run `cwiki web-ask . "<question>"` when useful, read the generated prompts, perform browser research when enabled, and follow the configured weights during synthesis.
+- If the user asks about relationships, impact, paths, central concepts, or graph structure, run `cwiki graph-report .`, `cwiki path . <a> <b>`, or `cwiki explain . <slug>` when useful.
 
 ## Directory Contract
 
@@ -84,6 +86,7 @@ wiki/             LLM-owned compiled knowledge layer
   index.md        Content catalog
   log.md          Append-only operation log
 .cwiki/prompts/   Generated working prompts, not knowledge
+.cwiki/graph/     Generated graph artifacts, not canonical knowledge
 ```
 
 ## Non-Negotiable Rules
@@ -91,6 +94,7 @@ wiki/             LLM-owned compiled knowledge layer
 - Never edit `raw/` unless the user explicitly asks.
 - Do not put generated knowledge outside `wiki/`.
 - Do not treat `.cwiki/prompts/` as knowledge.
+- Do not treat `.cwiki/graph/` as canonical knowledge; regenerate it from `wiki/` when stale.
 - Every factual claim needs a source path or URL.
 - Preserve source language. Chinese sources should produce Chinese wiki pages; English sources should produce English wiki pages. Do not translate by default unless the user explicitly asks.
 - Prefer updating existing wiki pages over creating isolated pages.
@@ -136,6 +140,18 @@ Action:
 5. Answer with local citations like `[[topic]]` and source paths or URLs.
 6. State gaps explicitly, including any extra pages inspected or prompt-listed pages that were not useful.
 7. Offer to save substantial synthesis into `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
+
+### Graph
+
+Trigger when the user asks about relationships, paths, impact analysis, central concepts, isolated pages, or graph structure.
+
+Action:
+
+1. Run `cwiki graph-report .`.
+2. Read `.cwiki/graph/GRAPH_REPORT.md`.
+3. Use `cwiki path . <from> <to>` for explicit relationship paths.
+4. Use `cwiki explain . <slug>` for a node-level view.
+5. Cite local pages as `[[slug]]` and mention when the graph only reflects existing wikilinks.
 
 ### Agent Browser
 
@@ -188,6 +204,7 @@ Use the local CLI when available:
 cwiki index .
 cwiki lint .
 cwiki search . "<query>"
+cwiki graph-report .
 cwiki web-ask . "<question>"
 ```
 
