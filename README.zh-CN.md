@@ -198,6 +198,10 @@ cwiki lint ./my-wiki
 cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
+cwiki graph <dir>
+cwiki graph-report <dir>
+cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
+cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
@@ -218,6 +222,8 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 在 agent 平台里问答时，推荐使用混合式 query workflow：先用 `cwiki ask` 生成可复现的 evidence prompt 和 brief；agent 先读取这些产物和其中列出的 wiki 页面；如果 prompt 上下文不足，再主动搜索 wiki、读取相邻高价值页面，并沿相关 `[[wikilink]]` 追一层。最终回答仍应遵守项目协议：包含 `## Evidence Used`、`## Answer`、`## Gaps`，用 `[[slug]]` 引用 wiki 页面，并在事实附近保留 source path 或 URL。需要实时网络证据时，应切到 `cwiki web-ask` 和 `wiki-agent-browser`，而不是依赖模型记忆。
 
 完整问答流程见 [docs/answering-workflow.zh-CN.md](docs/answering-workflow.zh-CN.md)。
+
+`graph` 和 `graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger 和 `[[wikilink]]` 生成轻量图谱层。第一版不调用大模型，也不读取 `raw/` 正文：页面是 node，wikilink 是 edge，输出 `.cwiki/graph/graph.json` 和 `.cwiki/graph/GRAPH_REPORT.md`。`path` 用无向 wikilink 图查两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。这个图谱层是后续 graph-aware retrieval 的底座。
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 

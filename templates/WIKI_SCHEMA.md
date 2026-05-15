@@ -24,6 +24,7 @@ wiki/
   index.md        Content catalog
   log.md          Append-only operation log
 .cwiki/prompts/   Generated ingest prompts and local working notes
+.cwiki/graph/     Generated graph artifacts from compiled wiki links
 ```
 
 ## Page Rules
@@ -130,6 +131,16 @@ For agent-platform use, query should be hybrid: the generated prompt provides a 
 8. In `## Evidence Used`, mark prompt-listed pages as used or not used, and list any extra pages discovered during hybrid exploration.
 9. State gaps explicitly.
 10. Offer to save substantial answers into the appropriate wiki section, commonly `wiki/comparisons/` or by updating `wiki/synthesis.md`.
+
+## Graph Workflow
+
+Use this when a question is about relationships, paths, impact, central pages, or graph structure.
+
+1. Run `cwiki graph-report .` to generate `.cwiki/graph/graph.json` and `.cwiki/graph/GRAPH_REPORT.md`.
+2. Treat the graph as a derived navigation artifact. The canonical knowledge remains in `wiki/`.
+3. Use `cwiki path . <from> <to>` for shortest wikilink paths.
+4. Use `cwiki explain . <slug>` for inbound links, outbound links, and claim sources.
+5. If the graph reveals missing links or broken links, update the relevant wiki pages with source-cited edits, then rerun `cwiki index .` and `cwiki graph-report .`.
 
 ## Agent Browser Workflow
 

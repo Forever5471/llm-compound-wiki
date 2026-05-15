@@ -212,6 +212,10 @@ Requirements:
 cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
+cwiki graph <dir>
+cwiki graph-report <dir>
+cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
+cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
@@ -232,6 +236,8 @@ The lightweight vector retrieval is not an embedding API. It tokenizes local Mar
 For agent-platform Q&A, use the hybrid query workflow. Start with `cwiki ask` so the question has a reproducible evidence prompt and brief. The agent should read those artifacts and the listed wiki pages first; if the prompt is incomplete, it may search the wiki again, inspect adjacent pages, and follow one level of useful `[[wikilinks]]`. Final prose should still follow the project answer protocol: `## Evidence Used`, `## Answer`, and `## Gaps`, with `[[slug]]` citations and source paths or URLs near factual claims. If current web evidence is needed, switch to `cwiki web-ask` and `wiki-agent-browser` rather than relying on model memory.
 
 See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answering workflow.
+
+`graph` and `graph-report` generate a lightweight graph layer from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/GRAPH_REPORT.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree. This graph layer is the base for future graph-aware retrieval.
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
