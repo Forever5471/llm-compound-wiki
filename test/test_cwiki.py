@@ -1,5 +1,6 @@
 import datetime as dt
 import http.server
+import importlib.util
 import json
 import os
 import subprocess
@@ -13,6 +14,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CLI = ROOT / "bin" / "cwiki.py"
+SPEC = importlib.util.spec_from_file_location("cwiki_module", CLI)
+assert SPEC and SPEC.loader
+CWIKI = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = CWIKI
+SPEC.loader.exec_module(CWIKI)
 
 
 def run_cwiki(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -48,6 +54,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
+            self.assertIn(".cwiki/graph/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -86,6 +93,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("Prefer this folder's local instructions and skills", claude)
             self.assertIn("If the local skills do not cover the task", claude)
             self.assertIn("Hybrid Agent Query Workflow", claude)
+            self.assertIn("Layered Retrieval Strategy", claude)
             self.assertIn("Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update", claude)
             agents = (root / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("The CLI is the scaffold and local utility layer", agents)
@@ -98,6 +106,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("Prefer this folder's local instructions and skills", agents)
             self.assertIn("If the local skills do not cover the task", agents)
             self.assertIn("Hybrid Agent Query Workflow", agents)
+            self.assertIn("Layered Retrieval Strategy", agents)
             self.assertIn("Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update", agents)
             ingest_skill = (root / ".claude" / "skills" / "wiki-ingest" / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("Mandatory global pages refresh", ingest_skill)
@@ -148,6 +157,73 @@ updated: 2026-05-08
             self.assertIn("[[rag-vs-llm-wiki]]", index)
             self.assertIn("Concept Pages", index)
             self.assertIn("Comparisons", index)
+
+    def test_graph_commands_create_report_path_and_node_explanation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Graph test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag, search]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval links to [[retrieval]], [[synthesis]], and [[missing-page]].
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval finds relevant evidence before synthesis. | raw/captures/source.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "reranking.md").write_text(
+                """---
+title: Reranking
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Reranking
+
+Reranking links to [[retrieval]].
+""",
+                encoding="utf-8",
+            )
+
+            graph_result = run_cwiki("graph", str(root))
+            self.assertIn("Created graph:", graph_result.stdout)
+            graph_file = root / ".cwiki" / "graph" / "graph.json"
+            graph = json.loads(graph_file.read_text(encoding="utf-8"))
+            self.assertEqual(graph["stats"]["node_count"], 4)
+            self.assertEqual(graph["stats"]["broken_edge_count"], 1)
+            self.assertFalse(any(edge["source"] == edge["target"] for edge in graph["edges"]))
+            retrieval = next(node for node in graph["nodes"] if node["id"] == "retrieval")
+            self.assertIn("raw/captures/source.md", retrieval["claim_sources"])
+
+            report_result = run_cwiki("graph-report", str(root))
+            self.assertIn("Created graph report:", report_result.stdout)
+            report = (root / ".cwiki" / "graph" / "graph.md").read_text(encoding="utf-8")
+            self.assertIn("Broken Links", report)
+            self.assertIn("[[retrieval]] -> [[missing-page]]", report)
+
+            path_result = run_cwiki("path", str(root), "reranking", "synthesis")
+            self.assertIn("[[reranking]] -> [[retrieval]] -> [[synthesis]]", path_result.stdout)
+
+            explain_result = run_cwiki("explain", str(root), "retrieval")
+            self.assertIn("# [[retrieval]]", explain_result.stdout)
+            self.assertIn("[[reranking]]", explain_result.stdout)
+            self.assertIn("raw/captures/source.md", explain_result.stdout)
 
     def test_lint_reports_broken_links(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -525,7 +601,7 @@ The wiki does not yet compare retrieval strategies.
             deterministic = payload["deterministic"]
             self.assertEqual(deterministic["answer_selection"]["mode"], "latest")
             self.assertEqual(deterministic["answer_selection"]["selected"], ".cwiki/answers/answer-2026-05-11-latest.md")
-            self.assertEqual(deterministic["answer_file"], latest_answer.as_posix())
+            self.assertEqual(Path(deterministic["answer_file"]).resolve(), latest_answer.resolve())
             self.assertIsNotNone(deterministic["scores"]["answer_quality"])
 
     def test_eval_all_json_supports_wiki_only(self) -> None:
@@ -927,6 +1003,373 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("Always include a `## Gaps` section", prompt_text)
             self.assertIn("not used - reason", prompt_text)
             self.assertIn("hybrid agent workflow", prompt_text)
+            self.assertIn("## Retrieval Trace", prompt_text)
+            self.assertIn("retrieval_strategy:", prompt_text)
+            brief_text = brief.read_text(encoding="utf-8")
+            self.assertIn("Retrieval Trace", brief_text)
+
+    def test_auto_path_records_direct_edge_path_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Path evidence test")
+            (root / "wiki" / "concepts" / "alpha.md").write_text(
+                """---
+title: Alpha
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Alpha
+
+Alpha relates to [[beta]].
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "beta.md").write_text(
+                """---
+title: Beta
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Beta
+
+Beta is the paired concept for alpha.
+""",
+                encoding="utf-8",
+            )
+
+            run_cwiki("ask", str(root), "How does alpha relate to beta?", "--retrieval", "auto")
+            prompt = next((root / ".cwiki" / "prompts").glob("query-*-how-does-alpha-relate-to-beta.md"))
+            prompt_text = prompt.read_text(encoding="utf-8")
+            self.assertIn("retrieval_strategy: path", prompt_text)
+            self.assertIn("retrieval_path_count: 1", prompt_text)
+            self.assertIn("- [[alpha]] -> [[beta]]", prompt_text)
+
+    def test_auto_path_without_path_evidence_falls_back_to_graph(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Fallback test")
+            for slug in ["alpha", "beta"]:
+                (root / "wiki" / "concepts" / f"{slug}.md").write_text(
+                    f"""---
+title: {slug.title()}
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# {slug.title()}
+
+{slug.title()} is a standalone concept.
+""",
+                    encoding="utf-8",
+                )
+
+            run_cwiki("ask", str(root), "How does alpha relate to beta?", "--retrieval", "auto")
+            prompt = next((root / ".cwiki" / "prompts").glob("query-*-how-does-alpha-relate-to-beta.md"))
+            prompt_text = prompt.read_text(encoding="utf-8")
+            self.assertIn("retrieval_strategy: graph", prompt_text)
+            self.assertIn("retrieval_requested: auto", prompt_text)
+            self.assertIn("retrieval_path_count: 0", prompt_text)
+            self.assertIn("retrieval_fallback_from: path", prompt_text)
+            self.assertIn("fell back to graph retrieval", prompt_text)
+
+    def test_eval_answer_reports_retrieval_quality_from_query_prompt(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Retrieval quality test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval links evidence to [[synthesis]] and supports [[reranking]].
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Retrieval links evidence to synthesis. | raw/captures/retrieval.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "reranking.md").write_text(
+                """---
+title: Reranking
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Reranking
+
+Reranking depends on [[retrieval]].
+""",
+                encoding="utf-8",
+            )
+
+            run_cwiki("ask", str(root), "How does reranking relate to synthesis?", "--retrieval", "path")
+            prompt = next((root / ".cwiki" / "prompts").glob("query-*-how-does-reranking-relate-to-synthesis.md"))
+            prompt_text = prompt.read_text(encoding="utf-8")
+            self.assertIn("retrieval_strategy: path", prompt_text)
+            self.assertIn("## Retrieval Trace", prompt_text)
+
+            answer = root / ".cwiki" / "answers" / "answer-retrieval-quality.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                f"""# Answer - Retrieval Quality
+
+## Question
+
+How does reranking relate to synthesis?
+
+## Answer
+
+Reranking depends on [[retrieval]], and retrieval connects evidence to [[synthesis]] according to `raw/captures/retrieval.md`.
+
+## Gaps
+
+The wiki does not yet compare reranking algorithms.
+
+## Relevant Pages
+
+- [[reranking]] (10) `wiki/concepts/reranking.md`
+- [[retrieval]] (8) `wiki/concepts/retrieval.md`
+- [[synthesis]] (3) `wiki/synthesis.md`
+
+## Query Prompt
+
+`{prompt.relative_to(root).as_posix()}`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("Retrieval Quality:", result.stdout)
+            self.assertIn("Strategy used: path", result.stdout)
+            self.assertIn("Direct hit usage:", result.stdout)
+
+    def test_eval_answer_lists_graph_and_path_retrieval_details(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Retrieval detail test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval connects to [[ranking]].
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "ranking.md").write_text(
+                """---
+title: Ranking
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Ranking
+
+Ranking orders retrieved pages.
+""",
+                encoding="utf-8",
+            )
+            prompt = root / ".cwiki" / "prompts" / "query-retrieval-details.md"
+            prompt.write_text(
+                """---
+title: Query Prompt - Retrieval details
+tags: [query, prompt]
+sources: 2
+updated: 2026-05-10
+status: pending
+retrieval_strategy: graph
+retrieval_requested: graph
+retrieval_complexity: low
+retrieval_direct_hits: 1
+retrieval_graph_expanded: 1
+retrieval_path_count: 1
+---
+
+# Query Prompt - Retrieval details
+
+## Retrieval Trace
+
+- Requested strategy: graph
+- Strategy used: graph
+- Complexity: low
+- Direct hit count: 1
+- Graph-expanded page count: 1
+- Path evidence count: 1
+
+### Direct Hits
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+
+### Graph-Expanded Pages
+
+- [[ranking]] (7) `wiki/concepts/ranking.md` - outbound neighbor of [[retrieval]]
+
+### Path Evidence
+
+- [[retrieval]] -> [[ranking]]
+
+### Final Context Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+- [[ranking]] (7) `wiki/concepts/ranking.md`
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-retrieval-details.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                f"""# Answer - Retrieval Details
+
+## Question
+
+How does retrieval use ranking?
+
+## Answer
+
+Retrieval uses [[ranking]] to order candidate pages according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+The wiki does not compare ranking algorithms.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+- [[ranking]] (7) `wiki/concepts/ranking.md`
+
+## Query Prompt
+
+`{prompt.relative_to(root).as_posix()}`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write")
+            self.assertIn("Graph-Expanded Pages Detail", result.stdout)
+            self.assertIn("[[ranking]] (7) `wiki/concepts/ranking.md` - outbound neighbor of [[retrieval]] - used in answer", result.stdout)
+            self.assertIn("Path Evidence Detail", result.stdout)
+            self.assertIn("[[retrieval]] -> [[ranking]]", result.stdout)
+
+    def test_llm_eval_prompt_follows_report_language(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Language test")
+            result = {
+                "mode": "answer",
+                "target": root.as_posix(),
+                "language": "zh-CN",
+                "scores": {"overall": 90},
+                "counts": {"warnings": 1},
+                "warnings": [],
+            }
+
+            prompt = CWIKI.build_llm_eval_prompt(root, result)
+            instruction = CWIKI.llm_eval_language_instruction("zh-CN")
+            self.assertIn("Required response language: Simplified Chinese (zh-CN)", prompt)
+            self.assertIn("Use the required response language", prompt)
+            self.assertIn("Respond entirely in Simplified Chinese", instruction)
+            self.assertIn("摘要", instruction)
+            self.assertIn("优先修复", instruction)
+
+    def test_eval_answer_attaches_agent_platform_llm_evaluation_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Agent eval attach test")
+            (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                """---
+title: Retrieval
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval finds evidence before synthesis.
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-agent-eval.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                """# Answer
+
+## Question
+
+What does retrieval do?
+
+## Answer
+
+Retrieval finds evidence before synthesis according to [[retrieval]] and `raw/captures/retrieval.md`.
+
+## Gaps
+
+No known gaps from the inspected wiki context.
+
+## Relevant Pages
+
+- [[retrieval]] (10) `wiki/concepts/retrieval.md`
+""",
+                encoding="utf-8",
+            )
+            agent_eval = root / ".cwiki" / "eval" / "agent-assisted-eval.md"
+            agent_eval.parent.mkdir(parents=True, exist_ok=True)
+            agent_eval.write_text("# 摘要\n\n当前 agent 模型认为答案证据充足。\n\n# 优先修复\n\n- 暂无。", encoding="utf-8")
+
+            result = run_cwiki(
+                "eval-answer",
+                str(root),
+                str(answer),
+                "--no-write",
+                "--agent-eval-file",
+                agent_eval.relative_to(root).as_posix(),
+                "--agent-model",
+                "codex-current",
+            )
+
+            self.assertIn("llm_assisted: true", result.stdout)
+            self.assertIn("llm_provider: agent-platform", result.stdout)
+            self.assertIn("llm_model: codex-current", result.stdout)
+            self.assertIn("Provider: `agent-platform`", result.stdout)
+            self.assertIn("Model: `codex-current`", result.stdout)
+            self.assertIn("Source file: `.cwiki/eval/agent-assisted-eval.md`", result.stdout)
+            self.assertIn("当前 agent 模型认为答案证据充足", result.stdout)
 
     def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:

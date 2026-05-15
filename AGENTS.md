@@ -38,6 +38,7 @@ The CLI supports:
 - `init`: scaffold a new wiki with schema, agent instructions, and skills
 - `capture`: record URLs and source files under `raw/captures/`
 - `index` and `lint`: maintain wiki consistency
+- `graph`, `graph-report`, `path`, and `explain`: generate and inspect the lightweight wikilink graph layer
 - `search` and `ask`: retrieve from the compiled local wiki
 - `answer`: call a configured model against local wiki context
 - `web-ask`: create a browser research workflow that combines local wiki evidence with current web evidence
@@ -59,3 +60,5 @@ CWIKI_WEB_ENABLED=true
 ```
 
 Command-line flags take precedence. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
+
+The graph layer is deterministic and zero-dependency. It derives `.cwiki/graph/graph.json` and `.cwiki/graph/GRAPH_REPORT.md` from compiled wiki pages, frontmatter, claim ledgers, and `[[wikilinks]]`. It is a navigation and retrieval artifact, not a replacement for the canonical `wiki/` pages.

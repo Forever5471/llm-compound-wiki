@@ -198,10 +198,14 @@ cwiki lint ./my-wiki
 cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
+cwiki graph <dir>
+cwiki graph-report <dir>
+cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
+cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
-cwiki ask <dir> <question> [--top-k 6] [--show-context]
+cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
@@ -219,6 +223,16 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 完整问答流程见 [docs/answering-workflow.zh-CN.md](docs/answering-workflow.zh-CN.md)。
 
+`graph` 和 `graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger 和 `[[wikilink]]` 生成轻量图谱层。第一版不调用大模型，也不读取 `raw/` 正文：页面是 node，wikilink 是 edge，输出 `.cwiki/graph/graph.json` 和 `.cwiki/graph/graph.md`。`path` 用无向 wikilink 图查两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。
+
+`ask --retrieval auto|direct|graph|path|synthesis` 会基于这层图谱在 query prompt 中记录 Retrieval Trace：
+
+- `direct`：直接关键词/向量命中，适合单点事实查询。
+- `graph`：direct hits 加入入边/出边邻居，适合附近概念、角色、模块和相关实体。
+- `path`：graph 上下文再加入最短路径证据，适合流程、机制、依赖、关系、how/why 类问题。
+- `synthesis`：direct、graph、path、overview/synthesis 和中心节点一起进入上下文，适合综合总结、对比、取舍、策略和评估。
+- `auto`：由 CLI 自动选择层级。若 `auto` 选中 `path` 但没有找到路径证据，会回退到 `graph`，并在 Retrieval Trace 中记录回退原因。
+
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
 当前实现里，CLI 本身不会直接联网浏览。复制到 `.claude/skills/` 和 `.agents/skills/` 的技能是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
@@ -233,7 +247,14 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 当希望 CLI 自己调用 `.env` 里配置的模型时，可以加 `--llm` 附加 LLM-assisted evaluation。报告会写清楚本次辅助评估使用的 provider、model、状态和时间；如果没有配置 API key，确定性评估仍会完成，LLM 部分标记为 `skipped`。
 
-如果这个 wiki 正在 Trae、Codex、Claude Code、Cursor 等 agent 平台中使用，LLM-assisted interpretation 应使用该平台当前会话的模型，而不是项目 `.env` 中配置的模型。此时建议正常运行确定性 eval 命令，再由 agent 用当前模型补充或总结 LLM-assisted evaluation，并在报告中标注 `provider: agent-platform`、`model: current agent model` 或平台可见的模型名称。`cwiki eval-schedule . --every-days 7 --llm` 适合终端/CLI 模型评估；如果是 agent 平台周期任务，应让平台 automation 先运行确定性 eval，再用当前 agent 模型完成辅助评估。
+如果这个 wiki 正在 Trae、Codex、Claude Code、Cursor 等 agent 平台中使用，LLM-assisted interpretation 应使用该平台当前会话的模型，而不是项目 `.env` 中配置的模型。让 agent 先把辅助评估写成 Markdown 文件，再把它附加进正式报告：
+
+```bash
+cwiki eval-answer . .cwiki/answers/answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+cwiki eval-all . --answer .cwiki/answers/answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+```
+
+报告会记录 `provider: agent-platform`、传入的模型名、时间戳和辅助评估来源文件。`cwiki eval-schedule . --every-days 7 --llm` 适合终端/CLI 模型评估；如果是 agent 平台周期任务，应让平台 automation 先运行确定性 eval，再用 `--agent-eval-file` 附加当前 agent 模型写出的辅助评估。
 
 ## 模型配置
 

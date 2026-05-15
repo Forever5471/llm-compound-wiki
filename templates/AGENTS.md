@@ -7,6 +7,7 @@ This is an LLM Compound Wiki.
 - `raw/` contains immutable source material. Never edit or delete raw files unless the user explicitly asks.
 - `wiki/` contains the AI-maintained compiled knowledge layer: summaries, entities, concepts, comparisons, overview, and synthesis.
 - `.cwiki/prompts/` contains generated working prompts. It is not knowledge.
+- `.cwiki/graph/` contains generated graph artifacts such as `graph.json` and `graph.md`. It is a reusable navigation artifact, not canonical knowledge.
 - `wiki/index.md` is the content catalog. Update it after every ingest or saved analysis.
 - `wiki/log.md` is append-only. Never rewrite history.
 
@@ -17,6 +18,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 ## Execution Model
 
 - The CLI is the scaffold and local utility layer: initialize, capture, index, lint, search, and generate prompts or briefs.
+- `graph` and `graph-report` create a deterministic graph layer from compiled wiki pages and `[[wikilinks]]`.
 - Agent intelligence runs in the current agent platform. Use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
 - Local skills are instructions for agents, not executable CLI plugins.
 - `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
@@ -27,7 +29,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 
 Use this when answering inside an agent platform such as Codex, Trae, Claude Code, Cursor, or OpenCode.
 
-1. Prefer the standard path first: run `cwiki ask . "<question>"` when no suitable query prompt exists.
+1. Prefer the standard path first: run `cwiki ask . "<question>" --retrieval auto` when no suitable query prompt exists.
 2. Read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`; treat the prompt as the reproducible evidence boundary.
 3. Read every relevant page listed in the prompt from disk, plus `wiki/index.md`.
 4. If the prompt context is incomplete, search or inspect additional high-signal wiki pages and follow one level of useful `[[wikilinks]]`.
@@ -35,6 +37,16 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 6. Final prose comes from the current agent model, not `.env`, unless the user explicitly asks for `cwiki answer`.
 7. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`; cite `[[slug]]` pages and source paths or URLs near factual claims.
 8. In `## Evidence Used`, mark prompt-listed pages as `used` or `not used - reason`, and list any extra pages or web sources discovered during hybrid exploration.
+
+## Layered Retrieval Strategy
+
+- `direct`: use direct keyword/vector hits only. Best for narrow fact lookup when one or a few pages clearly answer the question.
+- `graph`: start with direct hits, then add inbound/outbound wikilink neighbors from `.cwiki/graph/graph.json`. Best when the question may need nearby concepts, roles, modules, or related entities.
+- `path`: use direct hits, graph neighbors, and shortest-path evidence between top hits. Best for workflows, mechanisms, dependencies, relationships, and "how/why" questions.
+- `synthesis`: include direct hits, graph context, path evidence, and global overview/synthesis/central pages. Best for comparisons, tradeoffs, strategy, evaluation, or broad summaries.
+- `auto`: let the CLI choose a layer from the question. If `auto` selects `path` but no path evidence exists, the CLI falls back to `graph` and records the fallback in Retrieval Trace.
+
+For graph retrieval, first run or refresh `cwiki graph-report .` when links have changed. Then use the query prompt's Retrieval Trace: direct hits are primary evidence, graph-expanded pages are nearby context, path evidence explains relationships, and final context pages define the reproducible evidence pack.
 
 ## Skill Locations
 
@@ -56,11 +68,12 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
-- For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Run deterministic `cwiki eval`, `cwiki eval-answer`, or `cwiki eval-all` first, then add or summarize the LLM-assisted section with `provider: agent-platform` and the visible model name when available.
+- For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Write the assisted assessment to `.cwiki/eval/agent-assisted-*.md`, then attach it with `--agent-eval-file <file> --agent-model <visible-model-name>` so the official report records `provider: agent-platform`.
 - Prefer this folder's local instructions and skills before platform-specific skills: read `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, then use `.claude/skills/` or `.agents/skills/` for capture, ingest, query, update, lint, and browser research.
-- For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask` for a stable prompt and evidence brief, then let the agent inspect additional wiki pages only when the prompt is incomplete.
+- For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask . "<question>" --retrieval auto` for a stable prompt, evidence brief, and Retrieval Trace, then let the agent inspect additional wiki pages only when the prompt is incomplete.
 - If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
 - If the user asks for web evidence, run `cwiki web-ask . "<question>"` when useful, read the generated prompts, perform browser research when enabled, and follow the configured weights during synthesis.
+- If the user asks about relationships, impact, paths, central concepts, or graph structure, run `cwiki graph-report .`, `cwiki path . <a> <b>`, or `cwiki explain . <slug>` when useful.
 
 ## Operating Principles
 
@@ -75,4 +88,5 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 - Valuable query answers should be offered as updates to `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 - Web evidence is external until captured. Cite exact URLs and access dates, then use `cwiki capture` before ingesting important web sources into `wiki/`.
 - Browser research should be recorded under `.cwiki/web-research/`, then fused with local wiki evidence through the generated `.cwiki/prompts/fusion-*.md`.
+- Generated graph artifacts should be refreshed with `cwiki graph-report .` after substantial link or page changes.
 - Use `cwiki lint .` periodically to find broken links, stale claims, and orphan pages.

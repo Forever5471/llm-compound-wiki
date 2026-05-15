@@ -10,7 +10,7 @@
 
 当 CLI 独立运行且本地 `.env` 已配置模型 provider 时，evaluation 可以通过 `--llm` 额外包含一段 LLM 参与的评估结论。该部分必须明确标注为 LLM-assisted evaluation，同时仍然输出无 LLM 参与的确定性报告。
 
-当 wiki 正在 agent 平台中操作时，LLM-assisted assessment 应使用该平台当前 agent 模型，而不是项目 `.env` 里的模型配置。agent 应先运行确定性 evaluation，再用当前 agent 模型补充 LLM-assisted 部分，并在报告中把模型来源标为 `agent-platform`，同时尽量写出平台可见的模型名称。
+当 wiki 正在 agent 平台中操作时，LLM-assisted assessment 应使用该平台当前 agent 模型，而不是项目 `.env` 里的模型配置。agent 应先把辅助评估写成 Markdown 文件，再用 `--agent-eval-file <file>` 和 `--agent-model <label>` 附加进正式报告。报告会把模型来源标为 `agent-platform`，记录模型名称和辅助评估来源文件。
 
 如果没有 CLI 模型配置，则仍输出确定性的结构化报告；当用户请求了 CLI `--llm` 时，将 LLM-assisted 部分标记为 `skipped`。
 
@@ -192,6 +192,8 @@ cwiki eval . --stale-days 30
 `cwiki eval-answer <dir> <answer-file>` 评价一个生成后的答案文件，通常来自 `.cwiki/answers/`，也可以是复制进来的 Markdown 答案。
 
 它不应试图证明每句话都是真的。确定性实现会检查答案是否 grounded、可追踪、并遵守 wiki 协议。
+
+当答案链接到 `cwiki ask` 或 `cwiki answer` 生成的 query prompt 时，answer evaluation 还会读取 prompt 中的 Retrieval Trace。报告会展示本次使用的检索策略（`direct`、`graph`、`path` 或 `synthesis`）、直接命中页面使用情况、图谱扩展页面使用情况、路径证据数量、auto 回退原因和检索质量分数。这个维度用于判断检索策略是否匹配问题复杂度，以及被检索出的上下文是否真的支撑了最终回答。
 
 当用户要求评估答案质量、grounding、来源使用，或某个回答是否遵守 wiki/web evidence 协议时，应使用该模式。
 
@@ -785,11 +787,18 @@ cwiki eval-answer . answer.md --llm
 cwiki eval-all . --answer answer.md --llm
 ```
 
+agent 平台辅助评估：
+
+```bash
+cwiki eval-answer . answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+cwiki eval-all . --answer answer.md --agent-eval-file .cwiki/eval/agent-assisted-eval.md --agent-model "current-agent-model"
+```
+
 行为：
 
 - 始终先运行确定性 evaluation。
 - 如果 `.env` 配置了模型，CLI 可以调用该模型生成 LLM-assisted 部分。
-- 如果运行在 agent 平台中，agent 应使用当前会话模型生成 LLM-assisted 部分，而不是调用项目 `.env` 配置的模型。
+- 如果运行在 agent 平台中，agent 应使用当前会话模型生成 LLM-assisted 部分，而不是调用项目 `.env` 配置的模型，并用 `--agent-eval-file` 附加进报告。
 - 如果没有 CLI 模型 key，保留确定性输出，并把 CLI LLM-assisted evaluation 标记为 `skipped`。
 - LLM 参与的部分必须明确标注。
 - 报告必须记录 provider、model、status 和 timestamp；agent 平台模式下 provider 可写为 `agent-platform`。

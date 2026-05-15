@@ -9,15 +9,21 @@ Do not answer from memory first. The compiled wiki is the working source of trut
 
 ## Steps
 
-1. Prefer the standard path first: run `cwiki ask . "<question>"` when no current query prompt exists, then read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`.
+1. Prefer the standard path first: run `cwiki ask . "<question>" --retrieval auto` when no current query prompt exists, then read the generated `.cwiki/prompts/query-*.md` and `.cwiki/briefs/brief-*.md`.
 2. Treat the generated query prompt as the reproducible evidence boundary. It tells you which pages were retrieved, which output shape to use, and how to report gaps.
-3. Read `wiki/index.md`.
-4. Read relevant pages across `wiki/summaries/`, `wiki/entities/`, `wiki/concepts/`, `wiki/comparisons/`, `wiki/overview.md`, and `wiki/synthesis.md`.
-5. If the generated prompt is incomplete, use the hybrid agent workflow: search the wiki again, inspect likely adjacent pages, and follow one level of relevant `[[wikilinks]]`.
-6. If the wiki is insufficient, say what is missing and optionally use current web sources if the user requested or the claim is time-sensitive.
-7. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`.
-8. Cite local pages like `[[topic]]` and keep source paths or URLs close to factual claims.
-9. Offer to save substantial synthesis into the appropriate wiki location.
+3. Read Retrieval Trace before reading pages:
+   - `direct` means direct hits are likely enough for narrow fact lookup.
+   - `graph` means direct hits plus graph-expanded neighbors should be checked for nearby concepts, roles, modules, or entities.
+   - `path` means the answer should inspect shortest-path evidence for workflows, mechanisms, dependencies, or relationships.
+   - `synthesis` means the answer should include overview/synthesis/central pages for broad comparison, strategy, evaluation, or summary questions.
+   - If `auto` fell back from `path` to `graph`, treat graph context as the active layer and state any weak/missing path evidence in `## Gaps`.
+4. Read `wiki/index.md`.
+5. Read relevant pages across `wiki/summaries/`, `wiki/entities/`, `wiki/concepts/`, `wiki/comparisons/`, `wiki/overview.md`, and `wiki/synthesis.md`.
+6. If the generated prompt is incomplete, use the hybrid agent workflow: search the wiki again, inspect likely adjacent pages, and follow one level of relevant `[[wikilinks]]`.
+7. If the wiki is insufficient, say what is missing and optionally use current web sources if the user requested or the claim is time-sensitive.
+8. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`.
+9. Cite local pages like `[[topic]]` and keep source paths or URLs close to factual claims.
+10. Offer to save substantial synthesis into the appropriate wiki location.
 
 If the user accepts saving:
 
