@@ -6,7 +6,7 @@
 
 ### CLI 准备 prompt
 
-`cwiki ask <dir> "<question>"` 不会调用大模型。它会检索本地 wiki，并写出：
+`cwiki ask <dir> "<question>"` 默认不会调用大模型。它会检索本地 wiki，并写出：
 
 - `.cwiki/prompts/query-*.md`：给回答 agent 或 LLM 使用。
 - `.cwiki/briefs/brief-*.md`：给人快速检查证据。
@@ -14,6 +14,8 @@
 当你希望先获得一个可复现的证据边界，再让 agent 生成最终文字时，用这条路径。
 
 可以用 `--retrieval auto|direct|graph|path|synthesis` 控制图谱上下文加入的深度。`auto` 会根据问题复杂度自动选择策略，并在 prompt 的 Retrieval Trace 中记录本次选择。
+
+如果希望在写出 prompt 前让模型参与图候选排序，可以加 `--graph-rerank`。这会调用 `.env` 或命令行配置的大模型，对 graph/path/synthesis 的 final context candidates 做语义重排，并把重排状态、理由和 gaps 写入 Retrieval Trace。
 
 ### 分层检索策略
 
@@ -32,6 +34,8 @@
 这条路径偏终端使用。它会使用本地 wiki 检索和配置的大模型，但不会执行实时联网搜索。
 
 它和 `ask` 使用同一套 retrieval strategy，因此后续 answer evaluation 可以读取关联 query prompt，并评价本次检索质量。
+
+加 `--graph-rerank` 时，`answer` 会先进行 LLM 图重排，再把重排后的 Context Pack 交给最终回答模型；因此一次命令会发生“图重排模型调用 + 最终回答模型调用”两次模型调用。
 
 ### Agent 平台混合式回答
 

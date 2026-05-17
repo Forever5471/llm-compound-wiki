@@ -141,6 +141,8 @@ For agent-platform use, query should be hybrid: the generated prompt provides a 
 - `synthesis`: direct hits plus graph context, path evidence, and overview/synthesis/central pages; use for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
 - `auto`: CLI-selected layer. If `auto` selects `path` but no path evidence exists, it falls back to `graph` and records the fallback in Retrieval Trace.
 
+Add `--graph-rerank` only when semantic reranking is worth an extra model call. The LLM rerank result is guidance for ordering final context pages; source-backed wiki pages and claim ledgers remain the evidence source.
+
 ## Graph Workflow
 
 Use this when a question is about relationships, paths, impact, central pages, or graph structure.

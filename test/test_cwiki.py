@@ -1096,6 +1096,141 @@ status: active
             self.assertIn("retrieval_fallback_from: path", prompt_text)
             self.assertIn("fell back to graph retrieval", prompt_text)
 
+    def test_answer_graph_rerank_feeds_reranked_context_to_model(self) -> None:
+        requests: list[dict[str, object]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                requests.append(payload)
+                if len(requests) == 1:
+                    body = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "selected": [
+                                                {
+                                                    "slug": "beta",
+                                                    "rank": 1,
+                                                    "reason": "Beta explains the linked control surface needed for the answer.",
+                                                }
+                                            ],
+                                            "gaps": ["Only local wiki graph candidates were available."],
+                                        }
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                else:
+                    body = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "## Evidence Used\n- [[beta]] - used - source: raw/captures/beta.md\n- [[alpha]] - used - source: raw/captures/alpha.md\n\n## Answer\nBeta should be considered before Alpha because the rerank trace identified [[beta]] as the linked control surface.\n\n## Gaps\nOnly local wiki graph candidates were available."
+                                }
+                            }
+                        ]
+                    }
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_key = os.environ.get("CWIKI_TEST_GLM_KEY")
+        os.environ["CWIKI_TEST_GLM_KEY"] = "test-key"
+        try:
+            with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+                root = Path(tmp)
+                run_cwiki("init", str(root), "--domain", "Graph rerank answer test")
+                (root / "wiki" / "concepts" / "alpha.md").write_text(
+                    """---
+title: Alpha
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Alpha
+
+Alpha workflow links to [[beta]].
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Alpha links to beta. | raw/captures/alpha.md | high | 2026-05-10 |
+""",
+                    encoding="utf-8",
+                )
+                (root / "wiki" / "concepts" / "beta.md").write_text(
+                    """---
+title: Beta
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Beta
+
+Beta is the linked control surface.
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Beta is a linked control surface. | raw/captures/beta.md | high | 2026-05-10 |
+""",
+                    encoding="utf-8",
+                )
+
+                result = run_cwiki(
+                    "answer",
+                    str(root),
+                    "How should alpha use its linked workflow?",
+                    "--retrieval",
+                    "graph",
+                    "--graph-rerank",
+                    "--provider",
+                    "glm",
+                    "--model",
+                    "glm-test",
+                    "--api-key-env",
+                    "CWIKI_TEST_GLM_KEY",
+                    "--base-url",
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                )
+                self.assertIn("Saved answer:", result.stdout)
+                self.assertEqual(len(requests), 2)
+                self.assertIn("LLM Graph Rerank Request", requests[0]["messages"][1]["content"])
+                self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
+                answer_prompt = requests[1]["messages"][1]["content"]
+                self.assertIn("retrieval_graph_rerank: completed", answer_prompt)
+                self.assertIn("Beta explains the linked control surface", answer_prompt)
+                self.assertLess(answer_prompt.index("- [[beta]]"), answer_prompt.index("- [[alpha]]"))
+        finally:
+            if old_key is None:
+                os.environ.pop("CWIKI_TEST_GLM_KEY", None)
+            else:
+                os.environ["CWIKI_TEST_GLM_KEY"] = old_key
+            server.shutdown()
+            server.server_close()
+
     def test_eval_answer_reports_retrieval_quality_from_query_prompt(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)

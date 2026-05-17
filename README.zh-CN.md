@@ -205,9 +205,9 @@ cwiki graph-report <dir>
 cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
 cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
-cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--show-context]
+cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
@@ -217,7 +217,7 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
-`ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+`ask` 默认不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。只有显式加 `--graph-rerank` 时，`ask` 才会调用 `.env` 或命令行配置的大模型，对 graph/path/synthesis 检索候选做语义重排。
 
 这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。
 
@@ -234,6 +234,8 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 - `path`：graph 上下文再加入最短路径证据，适合流程、机制、依赖、关系、how/why 类问题。
 - `synthesis`：direct、graph、path、overview/synthesis 和中心节点一起进入上下文，适合综合总结、对比、取舍、策略和评估。
 - `auto`：由 CLI 自动选择层级。若 `auto` 选中 `path` 但没有找到路径证据，会回退到 `graph`，并在 Retrieval Trace 中记录回退原因。
+
+加 `--graph-rerank` 后，CLI 会把 final context candidates 的标题、摘要、来源角色、路径/邻居原因交给配置的大模型，让它返回严格 JSON 排序。重排状态、选中理由和 gaps 会写入 Retrieval Trace；`answer --graph-rerank` 会把重排后的 Context Pack 继续交给最终回答模型。GLM 图重排默认发送 `thinking: disabled`，让输出 token 优先用于严格 JSON；可用 `CWIKI_GRAPH_RERANK_THINKING=enabled` 改为推理模式。
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
@@ -271,6 +273,15 @@ GLM_API_KEY=your-local-key
 # OpenAI 可选默认值
 CWIKI_OPENAI_MODEL=gpt-5.2
 OPENAI_API_KEY=your-local-key
+
+# 可选 graph rerank 默认值。
+# 用于 `cwiki ask --graph-rerank` 和 `cwiki answer --graph-rerank`。
+# 如果不设置，会复用 CWIKI_PROVIDER / CWIKI_MODEL。
+# CWIKI_GRAPH_RERANK_PROVIDER=glm
+# CWIKI_GRAPH_RERANK_MODEL=glm-4.6v
+# CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
+# CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+# CWIKI_GRAPH_RERANK_THINKING=disabled
 
 # web-ask 默认策略
 CWIKI_WEB_WIKI_WEIGHT=0.6

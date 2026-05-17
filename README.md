@@ -219,9 +219,9 @@ cwiki graph-report <dir>
 cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
 cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
-cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--show-context]
+cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
@@ -231,7 +231,7 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
-`ask` does not call an LLM. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer.
+`ask` does not call an LLM by default. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer. Add `--graph-rerank` only when you want the configured model to semantically rerank graph/path/synthesis retrieval candidates before the prompt is written.
 
 The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings.
 
@@ -248,6 +248,8 @@ See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answer
 - `path`: graph context plus shortest-path evidence for workflows, mechanisms, dependencies, relationships, and how/why questions.
 - `synthesis`: direct, graph, path, overview/synthesis, and central-node context for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
 - `auto`: CLI-selected layer. If `auto` selects `path` but finds no path evidence, it falls back to `graph` and records the fallback in Retrieval Trace.
+
+With `--graph-rerank`, the CLI sends final context candidate titles, summaries, retrieval roles, and neighbor/path reasons to the configured model and asks for strict JSON ranking. The rerank status, selected reasons, and gaps are written into Retrieval Trace; `answer --graph-rerank` then sends the reranked Context Pack to the final answer model. GLM graph rerank sends `thinking: disabled` by default so output tokens go to strict JSON; set `CWIKI_GRAPH_RERANK_THINKING=enabled` if you want reasoning-enabled rerank.
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
@@ -285,6 +287,15 @@ GLM_API_KEY=your-local-key
 # Optional OpenAI defaults
 CWIKI_OPENAI_MODEL=gpt-5.2
 OPENAI_API_KEY=your-local-key
+
+# Optional graph rerank defaults.
+# Used by `cwiki ask --graph-rerank` and `cwiki answer --graph-rerank`.
+# If unset, graph rerank uses CWIKI_PROVIDER / CWIKI_MODEL.
+# CWIKI_GRAPH_RERANK_PROVIDER=glm
+# CWIKI_GRAPH_RERANK_MODEL=glm-4.6v
+# CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
+# CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+# CWIKI_GRAPH_RERANK_THINKING=disabled
 
 # web-ask defaults
 CWIKI_WEB_WIKI_WEIGHT=0.6

@@ -6,7 +6,7 @@ This document describes the recommended question-answering paths for an initiali
 
 ### CLI prompt preparation
 
-`cwiki ask <dir> "<question>"` does not call a model. It retrieves local wiki context and writes:
+`cwiki ask <dir> "<question>"` does not call a model by default. It retrieves local wiki context and writes:
 
 - `.cwiki/prompts/query-*.md` for an answering agent or LLM.
 - `.cwiki/briefs/brief-*.md` for quick human inspection.
@@ -14,6 +14,8 @@ This document describes the recommended question-answering paths for an initiali
 Use this when you want a reproducible evidence boundary before an agent writes final prose.
 
 Use `--retrieval auto|direct|graph|path|synthesis` to control how much graph-aware context is added. `auto` classifies question complexity and records the chosen strategy in the prompt's Retrieval Trace.
+
+Add `--graph-rerank` when you want the configured model to rerank graph/path/synthesis final context candidates before the prompt is written. The rerank status, reasons, and gaps are recorded in Retrieval Trace.
 
 ### Layered retrieval strategy
 
@@ -32,6 +34,8 @@ Graph retrieval does not treat the graph as a fact source. `.cwiki/graph/graph.j
 This path is terminal-oriented. It uses local wiki retrieval and the configured model, but it does not perform live web search.
 
 It uses the same retrieval strategy options as `ask`, so answer evaluation can later inspect the linked query prompt and score retrieval quality.
+
+With `--graph-rerank`, `answer` first performs the LLM graph rerank, then sends the reranked Context Pack to the final answer model. That means one command performs two model calls: graph rerank plus final answer generation.
 
 ### Agent-platform hybrid answering
 

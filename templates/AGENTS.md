@@ -48,6 +48,8 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 
 For graph retrieval, first run or refresh `cwiki graph-report .` when links have changed. Then use the query prompt's Retrieval Trace: direct hits are primary evidence, graph-expanded pages are nearby context, path evidence explains relationships, and final context pages define the reproducible evidence pack.
 
+Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --graph-rerank` when semantic reranking is worth an extra model call. Inspect the `LLM Graph Rerank` section before answering, but keep source-backed page evidence above rerank reasons.
+
 ## Skill Locations
 
 - `.claude/skills/` contains the canonical skill definitions.

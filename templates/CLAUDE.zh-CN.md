@@ -69,6 +69,8 @@ LLM 负责创建页面、在新来源到来时更新页面、维护交叉引用�
 - Path Evidence 解释页面关系。
 - Final Context Pages 是可复现证据包。
 
+当语义重排值得额外调用一次模型时，可以运行 `cwiki ask . "<question>" --graph-rerank` 或 `cwiki answer . "<question>" --graph-rerank`。回答前读取 `LLM Graph Rerank` 区块，但事实依据仍以页面正文、Claim Ledger 和 source path 为准。
+
 ## 本地配置
 
 - `.env.example` 是本地模型与 web-search 默认配置模板。

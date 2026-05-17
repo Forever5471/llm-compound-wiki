@@ -16,6 +16,7 @@ Do not answer from memory first. The compiled wiki is the working source of trut
    - `graph` means direct hits plus graph-expanded neighbors should be checked for nearby concepts, roles, modules, or entities.
    - `path` means the answer should inspect shortest-path evidence for workflows, mechanisms, dependencies, or relationships.
    - `synthesis` means the answer should include overview/synthesis/central pages for broad comparison, strategy, evaluation, or summary questions.
+   - If `--graph-rerank` was used, inspect the `LLM Graph Rerank` section and respect the reranked Final Context Pages order unless the page evidence contradicts it.
    - If `auto` fell back from `path` to `graph`, treat graph context as the active layer and state any weak/missing path evidence in `## Gaps`.
 4. Read `wiki/index.md`.
 5. Read relevant pages across `wiki/summaries/`, `wiki/entities/`, `wiki/concepts/`, `wiki/comparisons/`, `wiki/overview.md`, and `wiki/synthesis.md`.

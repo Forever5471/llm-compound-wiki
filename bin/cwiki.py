@@ -43,6 +43,16 @@ GLM_API_KEY=replace-with-your-local-key
 CWIKI_OPENAI_MODEL=gpt-5.2
 OPENAI_API_KEY=replace-with-your-local-key
 
+# Optional graph rerank defaults
+# Used by `cwiki ask --graph-rerank` and `cwiki answer --graph-rerank`.
+# If unset, graph rerank uses CWIKI_PROVIDER / CWIKI_MODEL defaults.
+# GLM graph rerank disables thinking by default so output tokens go to strict JSON.
+# CWIKI_GRAPH_RERANK_PROVIDER=glm
+# CWIKI_GRAPH_RERANK_MODEL=glm-4.6v
+# CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
+# CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+# CWIKI_GRAPH_RERANK_THINKING=disabled
+
 # web-ask defaults
 CWIKI_WEB_WIKI_WEIGHT=0.6
 CWIKI_WEB_WEIGHT=0.4
@@ -3397,6 +3407,12 @@ def graph_retrieval_hits(
     question: str,
     top_k: int,
     retrieval: str,
+    graph_rerank: bool = False,
+    rerank_provider: str | None = None,
+    rerank_model: str | None = None,
+    rerank_api_key_env: str | None = None,
+    rerank_base_url: str | None = None,
+    rerank_max_output_tokens: int = 500,
 ) -> tuple[list[tuple[Page, int]], dict[str, object]]:
     direct_hits = find_hits(pages, question, limit=max(top_k, 1), include_relation_boost=False)
     strategy, complexity = select_retrieval_strategy(question, retrieval, direct_hits)
@@ -3456,6 +3472,24 @@ def graph_retrieval_hits(
 
     final_limit = top_k if strategy == "direct" else top_k + 2
     ordered_slugs = sorted(scores, key=lambda slug: (-scores[slug], 0 if slug in direct_slugs else 1, slug))[:final_limit]
+    ordered_slugs, rerank_trace = maybe_llm_graph_rerank(
+        root=root,
+        question=question,
+        ordered_slugs=ordered_slugs,
+        pages_by_slug=pages_by_slug,
+        scores=scores,
+        direct_slugs=direct_slugs,
+        expanded=expanded,
+        path_evidence=path_evidence,
+        synthesis_slugs=synthesis_slugs,
+        strategy=strategy,
+        enabled=graph_rerank,
+        provider=rerank_provider,
+        model=rerank_model,
+        api_key_env=rerank_api_key_env,
+        base_url=rerank_base_url,
+        max_output_tokens=rerank_max_output_tokens,
+    )
     hits = [(pages_by_slug[slug], scores[slug]) for slug in ordered_slugs]
     trace = {
         "requested_strategy": retrieval,
@@ -3468,18 +3502,274 @@ def graph_retrieval_hits(
             {
                 "slug": slug,
                 "score": scores.get(slug, 0),
-                "reason": data["reason"],
-                "source": data["source"],
+                "reason": expanded[slug]["reason"],
+                "source": expanded[slug]["source"],
                 "file": pages_by_slug[slug].rel,
             }
-            for slug, data in sorted(expanded.items())
-            if slug in ordered_slugs
+            for slug in ordered_slugs
+            if slug in expanded
         ],
         "path_evidence": path_evidence,
         "synthesis_pages": sorted(set(slug for slug in synthesis_slugs if slug in ordered_slugs)),
         "final_pages": [{"slug": page.slug, "score": score, "file": page.rel} for page, score in hits],
+        "graph_rerank": rerank_trace,
     }
     return hits, trace
+
+
+def graph_rerank_status(requested: bool, status: str = "not_requested", reason: str = "") -> dict[str, object]:
+    return {
+        "requested": requested,
+        "status": status,
+        "reason": reason,
+        "provider": "",
+        "model": "",
+        "selected": [],
+        "gaps": [],
+        "prompt_version": "graph-rerank-v1",
+    }
+
+
+def int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def maybe_llm_graph_rerank(
+    root: Path,
+    question: str,
+    ordered_slugs: list[str],
+    pages_by_slug: dict[str, Page],
+    scores: dict[str, int],
+    direct_slugs: list[str],
+    expanded: dict[str, dict[str, str]],
+    path_evidence: list[list[str]],
+    synthesis_slugs: list[str],
+    strategy: str,
+    enabled: bool,
+    provider: str | None,
+    model: str | None,
+    api_key_env: str | None,
+    base_url: str | None,
+    max_output_tokens: int,
+) -> tuple[list[str], dict[str, object]]:
+    if not enabled:
+        return ordered_slugs, graph_rerank_status(False)
+    if strategy == "direct":
+        return ordered_slugs, graph_rerank_status(True, "skipped", "graph rerank is only used for graph/path/synthesis retrieval")
+    if len(ordered_slugs) < 2:
+        return ordered_slugs, graph_rerank_status(True, "skipped", "not enough graph candidates to rerank")
+
+    load_local_env(root)
+    resolved_provider = (provider or os.environ.get("CWIKI_GRAPH_RERANK_PROVIDER") or os.environ.get("CWIKI_PROVIDER") or "openai").lower()
+    if resolved_provider not in {"openai", "glm"}:
+        return ordered_slugs, graph_rerank_status(True, "failed", f"unsupported provider: {resolved_provider}")
+    resolved_model = model or os.environ.get("CWIKI_GRAPH_RERANK_MODEL") or resolve_model(resolved_provider, None)
+    resolved_api_key_env = api_key_env or os.environ.get("CWIKI_GRAPH_RERANK_API_KEY_ENV") or resolve_api_key_env(resolved_provider, None)
+    resolved_base_url = base_url or os.environ.get("CWIKI_GRAPH_RERANK_BASE_URL") or resolve_base_url(resolved_provider, None)
+    api_key = os.environ.get(resolved_api_key_env)
+    if not api_key:
+        status = graph_rerank_status(True, "skipped", f"missing API key in {resolved_api_key_env}")
+        status["provider"] = resolved_provider
+        status["model"] = resolved_model
+        return ordered_slugs, status
+
+    candidates = graph_rerank_candidates(
+        ordered_slugs,
+        pages_by_slug,
+        scores,
+        direct_slugs,
+        expanded,
+        path_evidence,
+        synthesis_slugs,
+    )
+    prompt = build_graph_rerank_prompt(question, strategy, candidates)
+    instructions = (
+        "You rerank graph retrieval candidates for an LLM Compound Wiki. "
+        "Use only the supplied candidate metadata and return strict JSON only."
+    )
+    try:
+        if resolved_provider == "openai":
+            text = call_openai_responses(api_key, resolved_model, instructions, prompt, max_output_tokens)
+        else:
+            text = call_openai_compatible_chat(
+                api_key=api_key,
+                base_url=resolved_base_url,
+                provider_name="GLM",
+                model=resolved_model,
+                instructions=instructions,
+                prompt=prompt,
+                max_output_tokens=max_output_tokens,
+                extra_payload=graph_rerank_chat_options(resolved_provider),
+            )
+    except RuntimeError as error:
+        status = graph_rerank_status(True, "failed", str(error))
+        status["provider"] = resolved_provider
+        status["model"] = resolved_model
+        return ordered_slugs, status
+
+    reranked, status = apply_llm_graph_rerank(ordered_slugs, text)
+    status["provider"] = resolved_provider
+    status["model"] = resolved_model
+    return reranked, status
+
+
+def graph_rerank_candidates(
+    ordered_slugs: list[str],
+    pages_by_slug: dict[str, Page],
+    scores: dict[str, int],
+    direct_slugs: list[str],
+    expanded: dict[str, dict[str, str]],
+    path_evidence: list[list[str]],
+    synthesis_slugs: list[str],
+) -> list[dict[str, object]]:
+    path_slugs = {slug for path in path_evidence for slug in path}
+    candidates: list[dict[str, object]] = []
+    for slug in ordered_slugs:
+        page = pages_by_slug[slug]
+        roles = []
+        reasons = []
+        if slug in direct_slugs:
+            roles.append("direct")
+            reasons.append("direct retrieval hit")
+        if slug in expanded:
+            roles.append(str(expanded[slug].get("source", "graph")))
+            reasons.append(str(expanded[slug].get("reason", "")))
+        if slug in path_slugs:
+            roles.append("path")
+            reasons.append("appears in path evidence")
+        if slug in synthesis_slugs:
+            roles.append("synthesis")
+            reasons.append("global or central synthesis context")
+        candidates.append(
+            {
+                "slug": slug,
+                "title": page.title,
+                "file": page.rel,
+                "kind": page.kind,
+                "tags": page.tags,
+                "score": scores.get(slug, 0),
+                "roles": sorted(set(role for role in roles if role)),
+                "reasons": [reason for reason in reasons if reason],
+                "summary": page.summary,
+            }
+        )
+    return candidates
+
+
+def build_graph_rerank_prompt(question: str, strategy: str, candidates: list[dict[str, object]]) -> str:
+    candidate_text = "\n".join(
+        f"""## Candidate {index}: [[{candidate['slug']}]]
+
+- Title: {candidate.get('title')}
+- File: `{candidate.get('file')}`
+- Kind: {candidate.get('kind')}
+- Tags: {candidate.get('tags') or '-'}
+- Deterministic score: {candidate.get('score', 0)}
+- Retrieval roles: {', '.join(candidate.get('roles', [])) or '-'}
+- Retrieval reasons: {'; '.join(candidate.get('reasons', [])) or '-'}
+- Summary: {candidate.get('summary') or '-'}
+"""
+        for index, candidate in enumerate(candidates, start=1)
+    )
+    return f"""# LLM Graph Rerank Request
+
+Question: {question}
+Retrieval strategy: {strategy}
+
+You are reranking final context candidates from a graph-aware retrieval step.
+Prefer pages that directly help answer the question, then pages that explain relationships, paths, mechanisms, dependencies, or synthesis context.
+Use only the candidate metadata below. Do not invent facts.
+
+Return strict JSON with this shape:
+
+```json
+{{
+  "selected": [
+    {{"slug": "page-slug", "rank": 1, "reason": "why this candidate should be earlier"}}
+  ],
+  "gaps": ["missing evidence or graph limitations"]
+}}
+```
+
+Rank at most {len(candidates)} candidates. Omitted candidates will keep deterministic order after selected candidates.
+
+## Candidates
+
+{candidate_text or '- No candidates.'}
+"""
+
+
+def extract_json_object(text: str) -> dict[str, object] | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    try:
+        payload = json.loads(stripped)
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def apply_llm_graph_rerank(ordered_slugs: list[str], llm_text: str) -> tuple[list[str], dict[str, object]]:
+    status = graph_rerank_status(True)
+    payload = extract_json_object(llm_text)
+    if not payload:
+        status["status"] = "failed"
+        status["reason"] = "LLM response was not parseable JSON; deterministic order retained"
+        return ordered_slugs, status
+
+    by_slug = {slug: slug for slug in ordered_slugs}
+    selected = payload.get("selected")
+    selected_rows: list[dict[str, object]] = []
+    reranked: list[str] = []
+    if isinstance(selected, list):
+        for item in selected:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug", ""))
+            if slug not in by_slug or slug in reranked:
+                continue
+            reranked.append(slug)
+            selected_rows.append(
+                {
+                    "slug": slug,
+                    "rank": int_or_none(item.get("rank")) or len(reranked),
+                    "reason": str(item.get("reason", "")).strip(),
+                }
+            )
+    if not reranked:
+        status["status"] = "failed"
+        status["reason"] = "LLM response did not select any known candidate; deterministic order retained"
+        return ordered_slugs, status
+
+    reranked.extend(slug for slug in ordered_slugs if slug not in reranked)
+    gaps = payload.get("gaps")
+    status["status"] = "completed"
+    status["selected"] = selected_rows
+    status["gaps"] = [str(gap) for gap in gaps] if isinstance(gaps, list) else []
+    return reranked, status
+
+
+def graph_rerank_chat_options(provider: str) -> dict[str, object]:
+    options: dict[str, object] = {}
+    thinking = os.environ.get("CWIKI_GRAPH_RERANK_THINKING")
+    if thinking is None and provider == "glm":
+        thinking = "disabled"
+    if thinking and thinking.strip():
+        options["thinking"] = {"type": thinking.strip().lower()}
+    return options
 
 
 def render_retrieval_trace(trace: dict[str, object]) -> str:
@@ -3489,6 +3779,7 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
     synthesis_pages = trace.get("synthesis_pages", [])
     final_pages = trace.get("final_pages", [])
     fallback_reason = str(trace.get("fallback_reason", "") or "")
+    rerank = trace.get("graph_rerank") if isinstance(trace.get("graph_rerank"), dict) else graph_rerank_status(False)
 
     direct_lines = "\n".join(f"- [[{item['slug']}]] ({item['score']}) `{item['file']}`" for item in direct) if direct else "- None"
     expanded_lines = (
@@ -3499,6 +3790,14 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
     path_lines = "\n".join("- " + " -> ".join(f"[[{slug}]]" for slug in path) for path in paths) if paths else "- None"
     synthesis_lines = "\n".join(f"- [[{slug}]]" for slug in synthesis_pages) if synthesis_pages else "- None"
     final_lines = "\n".join(f"- [[{item['slug']}]] ({item['score']}) `{item['file']}`" for item in final_pages) if final_pages else "- None"
+    rerank_selected = rerank.get("selected") if isinstance(rerank, dict) else []
+    rerank_lines = (
+        "\n".join(f"- [[{item.get('slug')}]] rank={item.get('rank')} - {item.get('reason') or '-'}" for item in rerank_selected if isinstance(item, dict))
+        if isinstance(rerank_selected, list) and rerank_selected
+        else "- None"
+    )
+    rerank_gaps = rerank.get("gaps") if isinstance(rerank, dict) else []
+    rerank_gap_lines = "\n".join(f"- {gap}" for gap in rerank_gaps) if isinstance(rerank_gaps, list) and rerank_gaps else "- None"
     return f"""## Retrieval Trace
 
 - Requested strategy: {trace.get('requested_strategy', 'auto')}
@@ -3507,6 +3806,9 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
 - Direct hit count: {len(direct)}
 - Graph-expanded page count: {len(expanded)}
 - Path evidence count: {len(paths)}
+- Graph rerank requested: {str(rerank.get('requested', False)).lower()}
+- Graph rerank status: {rerank.get('status', 'not_requested')}
+{f"- Graph rerank note: {rerank.get('reason')}" if rerank.get('reason') else ""}
 {f"- Fallback: {fallback_reason}" if fallback_reason else ""}
 
 ### Direct Hits
@@ -3524,6 +3826,19 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
 ### Synthesis Pages
 
 {synthesis_lines}
+
+### LLM Graph Rerank
+
+- Provider: `{rerank.get('provider') or '-'}`
+- Model: `{rerank.get('model') or '-'}`
+
+Selected:
+
+{rerank_lines}
+
+Gaps:
+
+{rerank_gap_lines}
 
 ### Final Context Pages
 
@@ -3615,11 +3930,29 @@ def create_query_prompt(
     question: str,
     top_k: int = DEFAULT_TOP_K,
     retrieval: str = "auto",
+    graph_rerank: bool = False,
+    rerank_provider: str | None = None,
+    rerank_model: str | None = None,
+    rerank_api_key_env: str | None = None,
+    rerank_base_url: str | None = None,
+    rerank_max_output_tokens: int = 500,
 ) -> tuple[Path, Path, list[tuple[Page, int]], str, str]:
     root = Path(target).resolve()
     assert_wiki(root)
     pages = collect_pages(root)
-    hits, trace = graph_retrieval_hits(root, pages, question, top_k, retrieval)
+    hits, trace = graph_retrieval_hits(
+        root,
+        pages,
+        question,
+        top_k,
+        retrieval,
+        graph_rerank,
+        rerank_provider,
+        rerank_model,
+        rerank_api_key_env,
+        rerank_base_url,
+        rerank_max_output_tokens,
+    )
     date = today()
     slug = slugify(question)
     ensure_dir(root / ".cwiki" / "prompts")
@@ -3661,6 +3994,7 @@ retrieval_graph_expanded: {len(trace.get('graph_expanded', []))}
 retrieval_path_count: {len(trace.get('path_evidence', []))}
 retrieval_fallback_from: {trace.get('fallback_from', '')}
 retrieval_fallback_reason: {trace.get('fallback_reason', '')}
+retrieval_graph_rerank: {(trace.get('graph_rerank') or {}).get('status', 'not_requested') if isinstance(trace.get('graph_rerank'), dict) else 'not_requested'}
 ---
 
 # Query Prompt - {question}
@@ -3748,6 +4082,10 @@ No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/i
         fallback_reason = str(trace.get("fallback_reason", "") or "")
         fallback_zh = f"- 回退：{fallback_reason}\n" if fallback_reason else ""
         fallback_en = f"- Fallback: {fallback_reason}\n" if fallback_reason else ""
+        rerank = trace.get("graph_rerank") if isinstance(trace.get("graph_rerank"), dict) else graph_rerank_status(False)
+        rerank_reason = str(rerank.get("reason", "") or "")
+        rerank_zh = f"- LLM 图重排：{rerank.get('status', 'not_requested')}{f'（{rerank_reason}）' if rerank_reason else ''}\n"
+        rerank_en = f"- LLM graph rerank: {rerank.get('status', 'not_requested')}{f' ({rerank_reason})' if rerank_reason else ''}\n"
         trace_zh = f"""
 ## 检索轨迹
 
@@ -3756,7 +4094,7 @@ No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/i
 - 直接命中：{len(trace.get('direct_hits', []))}
 - 图谱扩展：{len(trace.get('graph_expanded', []))}
 - 路径证据：{len(trace.get('path_evidence', []))}
-{fallback_zh}"""
+{rerank_zh}{fallback_zh}"""
         trace_en = f"""
 ## Retrieval Trace
 
@@ -3765,7 +4103,7 @@ No directly matching wiki pages were found. Run `cwiki index .`, inspect `wiki/i
 - Direct hits: {len(trace.get('direct_hits', []))}
 - Graph-expanded pages: {len(trace.get('graph_expanded', []))}
 - Path evidence: {len(trace.get('path_evidence', []))}
-{fallback_en}"""
+{rerank_en}{fallback_en}"""
 
     if chinese:
         return f"""---
@@ -3890,9 +4228,32 @@ def extract_section_bullet(page: Page, heading: str, max_chars: int = 420) -> st
     return f"- [[{page.slug}]]: {body[:max_chars]}"
 
 
-def ask_wiki(target: str, question: str, top_k: int = DEFAULT_TOP_K, show_context: bool = False, retrieval: str = "auto") -> None:
+def ask_wiki(
+    target: str,
+    question: str,
+    top_k: int = DEFAULT_TOP_K,
+    show_context: bool = False,
+    retrieval: str = "auto",
+    graph_rerank: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+    api_key_env: str | None = None,
+    base_url: str | None = None,
+    graph_rerank_output_tokens: int = 500,
+) -> None:
     root = Path(target).resolve()
-    prompt_file, brief_file, hits, prompt, brief = create_query_prompt(target, question, top_k, retrieval)
+    prompt_file, brief_file, hits, prompt, brief = create_query_prompt(
+        target,
+        question,
+        top_k,
+        retrieval,
+        graph_rerank,
+        provider,
+        model,
+        api_key_env,
+        base_url,
+        graph_rerank_output_tokens,
+    )
     print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
     print(f"Created human brief: {brief_file.relative_to(root).as_posix()}")
     if hits:
@@ -4321,11 +4682,13 @@ def answer_wiki(
     question: str,
     top_k: int,
     retrieval: str,
+    graph_rerank: bool,
     provider: str,
     model: str | None,
     api_key_env: str | None,
     base_url: str | None,
     max_output_tokens: int,
+    graph_rerank_output_tokens: int,
 ) -> int:
     root = Path(target).resolve()
     load_local_env(root)
@@ -4337,7 +4700,18 @@ def answer_wiki(
     if provider not in {"openai", "glm"}:
         raise RuntimeError(f"Unsupported provider: {provider}. Currently supported: openai, glm")
 
-    prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(target, question, top_k, retrieval)
+    prompt_file, brief_file, hits, prompt, _brief = create_query_prompt(
+        target,
+        question,
+        top_k,
+        retrieval,
+        graph_rerank,
+        provider,
+        model,
+        api_key_env,
+        base_url,
+        graph_rerank_output_tokens,
+    )
     api_key = os.environ.get(api_key_env)
     if not api_key:
         print(f"Created query prompt: {prompt_file.relative_to(root).as_posix()}")
@@ -4459,6 +4833,7 @@ def call_openai_compatible_chat(
     instructions: str,
     prompt: str,
     max_output_tokens: int,
+    extra_payload: dict[str, object] | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -4468,6 +4843,8 @@ def call_openai_compatible_chat(
         ],
         "max_tokens": max_output_tokens,
     }
+    if extra_payload:
+        payload.update(extra_payload)
     url = f"{base_url.rstrip('/')}/chat/completions"
     req = request.Request(
         url,
@@ -4489,8 +4866,24 @@ def call_openai_compatible_chat(
 
     text = extract_chat_completion_text(data)
     if not text:
-        raise RuntimeError(f"{provider_name} API returned no text output.")
+        raise RuntimeError(f"{provider_name} API returned no text output. {chat_completion_shape_hint(data)}")
     return text
+
+
+def append_chat_content(chunks: list[str], value: object) -> None:
+    if isinstance(value, str):
+        if value.strip():
+            chunks.append(value)
+        return
+    if isinstance(value, dict):
+        for key in ("text", "content", "value"):
+            nested = value.get(key)
+            if isinstance(nested, (str, dict, list)):
+                append_chat_content(chunks, nested)
+        return
+    if isinstance(value, list):
+        for item in value:
+            append_chat_content(chunks, item)
 
 
 def extract_chat_completion_text(data: dict[str, object]) -> str:
@@ -4501,17 +4894,32 @@ def extract_chat_completion_text(data: dict[str, object]) -> str:
     for choice in choices:
         if not isinstance(choice, dict):
             continue
+        append_chat_content(chunks, choice.get("text"))
         message = choice.get("message")
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            chunks.append(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    chunks.append(part["text"])
+        if isinstance(message, dict):
+            for key in ("content", "reasoning_content", "reasoning", "text"):
+                append_chat_content(chunks, message.get(key))
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            for key in ("content", "reasoning_content", "text"):
+                append_chat_content(chunks, delta.get(key))
     return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def chat_completion_shape_hint(data: dict[str, object]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return f"Response keys: {', '.join(sorted(str(key) for key in data.keys())) or 'none'}."
+    first = choices[0]
+    if not isinstance(first, dict):
+        return "First choice was not an object."
+    message = first.get("message")
+    message_keys = sorted(str(key) for key in message.keys()) if isinstance(message, dict) else []
+    return (
+        f"Response keys: {', '.join(sorted(str(key) for key in data.keys())) or 'none'}; "
+        f"choice keys: {', '.join(sorted(str(key) for key in first.keys())) or 'none'}; "
+        f"message keys: {', '.join(message_keys) or 'none'}."
+    )
 
 
 def extract_response_text(data: dict[str, object]) -> str:
@@ -5004,6 +5412,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("question", nargs="+")
     ask_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     ask_parser.add_argument("--retrieval", choices=sorted(RETRIEVAL_MODES), default="auto")
+    ask_parser.add_argument("--graph-rerank", action="store_true", help="Use the configured model to rerank graph/path/synthesis retrieval candidates")
+    ask_parser.add_argument("--provider", default=None, help="Provider for --graph-rerank")
+    ask_parser.add_argument("--model", default=None, help="Model for --graph-rerank")
+    ask_parser.add_argument("--api-key-env", default=None, help="API key env var for --graph-rerank")
+    ask_parser.add_argument("--base-url", default=None, help="Base URL for --graph-rerank")
+    ask_parser.add_argument("--graph-rerank-output-tokens", type=int, default=500)
     ask_parser.add_argument("--show-context", action="store_true")
 
     web_ask_parser = subparsers.add_parser(
@@ -5024,11 +5438,13 @@ def build_parser() -> argparse.ArgumentParser:
     answer_parser.add_argument("question", nargs="+")
     answer_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     answer_parser.add_argument("--retrieval", choices=sorted(RETRIEVAL_MODES), default="auto")
+    answer_parser.add_argument("--graph-rerank", action="store_true", help="Use the configured model to rerank graph/path/synthesis retrieval candidates before answering")
     answer_parser.add_argument("--provider", default=None)
     answer_parser.add_argument("--model", default=None)
     answer_parser.add_argument("--api-key-env", default=None)
     answer_parser.add_argument("--base-url", default=None)
     answer_parser.add_argument("--max-output-tokens", type=int, default=1200)
+    answer_parser.add_argument("--graph-rerank-output-tokens", type=int, default=500)
 
     capture_parser = subparsers.add_parser("capture", help="Capture a source and create an ingest prompt")
     capture_parser.add_argument("dir")
@@ -5085,7 +5501,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
         elif args.command == "ask":
-            ask_wiki(args.dir, " ".join(args.question), args.top_k, args.show_context, args.retrieval)
+            ask_wiki(
+                args.dir,
+                " ".join(args.question),
+                args.top_k,
+                args.show_context,
+                args.retrieval,
+                args.graph_rerank,
+                args.provider,
+                args.model,
+                args.api_key_env,
+                args.base_url,
+                args.graph_rerank_output_tokens,
+            )
         elif args.command == "web-ask":
             web_ask_wiki(
                 args.dir,
@@ -5103,11 +5531,13 @@ def main(argv: list[str] | None = None) -> int:
                 " ".join(args.question),
                 args.top_k,
                 args.retrieval,
+                args.graph_rerank,
                 args.provider,
                 args.model,
                 args.api_key_env,
                 args.base_url,
                 args.max_output_tokens,
+                args.graph_rerank_output_tokens,
             )
         elif args.command == "capture":
             capture_source(args.dir, args.source, args.title)
