@@ -77,6 +77,9 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
+- The CLI automatically records model usage for `answer`, graph rerank, and `--llm` evaluation under `.cwiki/usage/llm-usage.jsonl`.
+- If this agent platform exposes token or cost numbers for ingest, update, browser research, final answer, or other platform-model work, record them with `cwiki usage-log . --operation <step> --provider agent-platform --model <visible-model-name> ...`.
+- Use `cwiki usage-report .` for a full cost report, or filter with `--operation`, `--artifact`, `--question`, `--provider`, `--model`, `--since`, and `--until`.
 - For LLM-assisted evaluation inside an agent platform, use the current agent model rather than the `.env` model. Write the assisted assessment to `.cwiki/eval/agent-assisted-*.md`, then attach it with `--agent-eval-file <file> --agent-model <visible-model-name>` so the official report records `provider: agent-platform`.
 - Prefer this folder's local instructions and skills before platform-specific skills: read `CLAUDE.md`, `AGENTS.md`, and `WIKI_SCHEMA.md`, then use `.claude/skills/` or `.agents/skills/` for capture, ingest, query, update, lint, and browser research.
 - For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask` for a stable prompt and evidence brief, then let the agent inspect additional wiki pages only when the prompt is incomplete.

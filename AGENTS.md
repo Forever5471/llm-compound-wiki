@@ -40,8 +40,11 @@ The CLI supports:
 - `index` and `lint`: maintain wiki consistency
 - `graph`, `graph-report`, `path`, and `explain`: generate and inspect the lightweight wikilink graph layer
 - `search` and `ask`: retrieve from the compiled local wiki
+- `ask --graph-rerank` and `answer --graph-rerank`: call the configured model for LLM graph reranking
 - `answer`: call a configured model against local wiki context
 - `web-ask`: create a browser research workflow that combines local wiki evidence with current web evidence
+- `eval`, `eval-answer`, `eval-all`: run deterministic quality evaluation, optionally with `--llm`
+- `usage-report` and `usage-log`: report automatic CLI LLM usage and manually record agent-platform usage
 
 `web-ask` generates:
 
@@ -62,3 +65,5 @@ CWIKI_WEB_ENABLED=true
 Command-line flags take precedence. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
 The graph layer is deterministic and zero-dependency. It derives `.cwiki/graph/graph.json` and `.cwiki/graph/GRAPH_REPORT.md` from compiled wiki pages, frontmatter, claim ledgers, and `[[wikilinks]]`. It is a navigation and retrieval artifact, not a replacement for the canonical `wiki/` pages.
+
+LLM usage is recorded under `.cwiki/usage/llm-usage.jsonl` whenever the CLI itself calls a model for `answer`, graph rerank, or LLM-assisted evaluation. Cost estimates depend only on `CWIKI_COST_*` rates configured by the user. When an external agent platform uses its active model for ingest, update, browser research, or interpretation, record any visible token/cost numbers with `cwiki usage-log`; the CLI cannot read platform token counters automatically.

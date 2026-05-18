@@ -25,6 +25,7 @@ wiki/
   log.md          Append-only operation log
 .cwiki/prompts/   Generated ingest prompts and local working notes
 .cwiki/graph/     Generated graph artifacts from compiled wiki links
+.cwiki/usage/     LLM token usage ledger and cost audit artifacts
 ```
 
 ## Page Rules
@@ -142,6 +143,13 @@ For agent-platform use, query should be hybrid: the generated prompt provides a 
 - `auto`: CLI-selected layer. If `auto` selects `path` but no path evidence exists, it falls back to `graph` and records the fallback in Retrieval Trace.
 
 Add `--graph-rerank` only when semantic reranking is worth an extra model call. The LLM rerank result is guidance for ordering final context pages; source-backed wiki pages and claim ledgers remain the evidence source.
+
+## LLM Usage Tracking
+
+- CLI-run model calls for `answer`, graph rerank, and `--llm` evaluation are automatically appended to `.cwiki/usage/llm-usage.jsonl`.
+- Costs are estimates based on user-configured `CWIKI_COST_*` rates only; no provider prices are hardcoded.
+- Use `cwiki usage-report .` for a full report, or filter by `--operation`, `--artifact`, `--question`, `--provider`, `--model`, `--since`, and `--until`.
+- Agent-platform model calls cannot be observed automatically by the CLI. If the platform shows token or cost numbers for ingest, update, browser research, final prose, or external evaluation, record them with `cwiki usage-log`.
 
 ## Graph Workflow
 

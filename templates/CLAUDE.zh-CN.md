@@ -79,6 +79,9 @@ LLM 负责创建页面、在新来源到来时更新页面、维护交叉引用�
 - `.env` 影响终端/CLI 流程，例如 `cwiki answer`；不会改变当前 agent 平台的聊天模型。
 - `cwiki answer` 使用配置的 provider/model 与本地 wiki 检索，但不执行实时联网搜索。
 - `web-ask` 读取 `.env` 中的 `CWIKI_WEB_WIKI_WEIGHT`、`CWIKI_WEB_WEIGHT`、`CWIKI_WEB_MAX_SOURCES`、`CWIKI_WEB_ENABLED` 等默认值；命令行参数优先。
+- CLI 会把 `answer`、图重排和 `--llm` evaluation 的模型用量自动记录到 `.cwiki/usage/llm-usage.jsonl`。
+- 如果当前 agent 平台能显示 ingest、update、浏览器研究、最终回答或其它平台模型工作的 token/费用，用 `cwiki usage-log . --operation <step> --provider agent-platform --model <visible-model-name> ...` 手动补记。
+- 需要完整成本报告时运行 `cwiki usage-report .`；可用 `--operation`、`--artifact`、`--question`、`--provider`、`--model`、`--since`、`--until` 过滤。
 - agent 平台内的 LLM-assisted evaluation 应使用当前 agent 模型。将辅助评估写入 `.cwiki/eval/agent-assisted-*.md`，再用 `--agent-eval-file <file> --agent-model <visible-model-name>` 附加进正式报告，报告会记录 `provider: agent-platform`。
 
 ## 目录契约

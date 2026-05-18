@@ -57,6 +57,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/web-research/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
             self.assertIn(".cwiki/graph/**", gitignore)
+            self.assertIn(".cwiki/usage/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -72,6 +73,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY=replace-with-your-local-key", env_example)
             self.assertIn("CWIKI_EVAL_PROVIDER=glm", env_example)
             self.assertIn("CWIKI_WEB_WIKI_WEIGHT=0.6", env_example)
+            self.assertIn("CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M", env_example)
             overview = (root / "wiki" / "overview.md").read_text(encoding="utf-8")
             self.assertIn("Entry Decision", overview)
             self.assertIn("Current Map", overview)
@@ -1123,7 +1125,8 @@ status: active
                                     )
                                 }
                             }
-                        ]
+                        ],
+                        "usage": {"prompt_tokens": 70, "completion_tokens": 20, "total_tokens": 90},
                     }
                 else:
                     body = {
@@ -1133,7 +1136,8 @@ status: active
                                     "content": "## Evidence Used\n- [[beta]] - used - source: raw/captures/beta.md\n- [[alpha]] - used - source: raw/captures/alpha.md\n\n## Answer\nBeta should be considered before Alpha because the rerank trace identified [[beta]] as the linked control surface.\n\n## Gaps\nOnly local wiki graph candidates were available."
                                 }
                             }
-                        ]
+                        ],
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
                     }
                 data = json.dumps(body).encode("utf-8")
                 self.send_response(200)
@@ -1223,11 +1227,154 @@ Beta is the linked control surface.
                 self.assertIn("retrieval_graph_rerank: completed", answer_prompt)
                 self.assertIn("Beta explains the linked control surface", answer_prompt)
                 self.assertLess(answer_prompt.index("- [[beta]]"), answer_prompt.index("- [[alpha]]"))
+                usage_records = [
+                    json.loads(line)
+                    for line in (root / ".cwiki" / "usage" / "llm-usage.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual([record["operation"] for record in usage_records], ["graph-rerank", "answer"])
+                self.assertEqual(usage_records[0]["usage"]["total_tokens"], 90)
+                self.assertEqual(usage_records[1]["usage"]["total_tokens"], 150)
         finally:
             if old_key is None:
                 os.environ.pop("CWIKI_TEST_GLM_KEY", None)
             else:
                 os.environ["CWIKI_TEST_GLM_KEY"] = old_key
+            server.shutdown()
+            server.server_close()
+
+    def test_answer_records_usage_cost_and_reports_it(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "## Evidence Used\n"
+                                    "- [[retrieval]] - used - source: raw/captures/retrieval.md\n\n"
+                                    "## Answer\n"
+                                    "Retrieval should collect source-backed wiki pages before synthesis, then cite [[retrieval]] near factual claims.\n\n"
+                                    "## Gaps\n"
+                                    "Only the local test wiki was available."
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 80, "completion_tokens": 40, "total_tokens": 120},
+                }
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        env_names = [
+            "CWIKI_TEST_GLM_KEY",
+            "CWIKI_COST_GLM_USAGE_TEST_MODEL_INPUT_PER_1M",
+            "CWIKI_COST_GLM_USAGE_TEST_MODEL_OUTPUT_PER_1M",
+            "CWIKI_COST_CURRENCY",
+        ]
+        old_env = {name: os.environ.get(name) for name in env_names}
+        os.environ["CWIKI_TEST_GLM_KEY"] = "test-key"
+        os.environ["CWIKI_COST_GLM_USAGE_TEST_MODEL_INPUT_PER_1M"] = "1"
+        os.environ["CWIKI_COST_GLM_USAGE_TEST_MODEL_OUTPUT_PER_1M"] = "3"
+        os.environ["CWIKI_COST_CURRENCY"] = "USD"
+        try:
+            with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+                root = Path(tmp)
+                run_cwiki("init", str(root), "--domain", "Usage cost test")
+                (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                    """---
+title: Retrieval
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval collects source-backed wiki pages before synthesis.
+""",
+                    encoding="utf-8",
+                )
+
+                result = run_cwiki(
+                    "answer",
+                    str(root),
+                    "What should retrieval do?",
+                    "--provider",
+                    "glm",
+                    "--model",
+                    "usage-test-model",
+                    "--api-key-env",
+                    "CWIKI_TEST_GLM_KEY",
+                    "--base-url",
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                )
+                self.assertIn("LLM usage: input=80 output=40 total=120 cost=0.000200 USD (estimated)", result.stdout)
+                answer_file = next((root / ".cwiki" / "answers").glob("answer-*.md"))
+                answer_text = answer_file.read_text(encoding="utf-8")
+                self.assertIn("llm_total_tokens: 120", answer_text)
+                self.assertIn("llm_estimated_cost: 0.00020000", answer_text)
+                self.assertIn("## LLM Usage", answer_text)
+
+                usage_records = [
+                    json.loads(line)
+                    for line in (root / ".cwiki" / "usage" / "llm-usage.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(len(usage_records), 1)
+                self.assertEqual(usage_records[0]["operation"], "answer")
+                self.assertEqual(usage_records[0]["usage"]["input_tokens"], 80)
+                self.assertEqual(usage_records[0]["cost"]["total_cost"], 0.0002)
+
+                report = run_cwiki("usage-report", str(root), "--operation", "answer")
+                self.assertIn("- Total tokens: 120", report.stdout)
+                self.assertIn("| answer | 1 | 80 | 40 | 120 | 0.000200 USD |", report.stdout)
+
+                json_report = run_cwiki("usage-report", str(root), "--json")
+                payload = json.loads(json_report.stdout)
+                self.assertEqual(payload["summary"]["records"], 1)
+                self.assertEqual(payload["summary"]["total_tokens"], 120)
+                self.assertEqual(payload["summary"]["costs_by_currency"]["USD"], 0.0002)
+
+                manual = run_cwiki(
+                    "usage-log",
+                    str(root),
+                    "--operation",
+                    "ingest",
+                    "--provider",
+                    "agent-platform",
+                    "--model",
+                    "current-agent-model",
+                    "--input-tokens",
+                    "12000",
+                    "--output-tokens",
+                    "1800",
+                    "--estimated-cost",
+                    "0.05",
+                    "--currency",
+                    "USD",
+                    "--artifact",
+                    "wiki/synthesis.md",
+                )
+                self.assertIn("Recorded usage:", manual.stdout)
+                ingest_report = run_cwiki("usage-report", str(root), "--operation", "ingest")
+                self.assertIn("| ingest | 1 | 12000 | 1800 | 13800 | 0.050000 USD |", ingest_report.stdout)
+        finally:
+            for name, value in old_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
             server.shutdown()
             server.server_close()
 

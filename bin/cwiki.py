@@ -53,6 +53,17 @@ OPENAI_API_KEY=replace-with-your-local-key
 # CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 # CWIKI_GRAPH_RERANK_THINKING=disabled
 
+# Optional token cost rates. Values are price per 1M tokens; no defaults are hardcoded.
+# You can set generic, provider-level, or provider+model-level rates.
+# For glm-4.6v, the model fragment is GLM_4_6V.
+# CWIKI_COST_INPUT_PER_1M=0
+# CWIKI_COST_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_INPUT_PER_1M=0
+# CWIKI_COST_GLM_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+# CWIKI_COST_CURRENCY=USD
+
 # web-ask defaults
 CWIKI_WEB_WIKI_WEIGHT=0.6
 CWIKI_WEB_WEIGHT=0.4
@@ -126,6 +137,13 @@ class Page:
     updated: str
     status: str
     links: list[str]
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    usage: dict[str, object]
+    cost: dict[str, object]
 
 
 def today() -> str:
@@ -394,6 +412,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             ".cwiki/web-research/**\n"
             ".cwiki/eval/**\n"
             ".cwiki/graph/**\n"
+            ".cwiki/usage/**\n"
             ".env\n"
             ".DS_Store\n"
         ),
@@ -1459,6 +1478,16 @@ def load_agent_platform_eval(root: Path, agent_eval_file: str, agent_model: str 
     payload["response"] = path.read_text(encoding="utf-8").strip()
     payload["prompt_version"] = "eval-agent-platform-v1"
     payload["source_file"] = display_path(path, root)
+    payload["usage"] = {
+        "status": "unavailable",
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "raw": {},
+        "provider": "agent-platform",
+        "model": agent_model or "current-agent-model",
+    }
+    payload["cost"] = estimate_llm_cost("agent-platform", agent_model or "current-agent-model", payload["usage"])
     return payload
 
 
@@ -1508,9 +1537,9 @@ def run_llm_eval(
     prompt = build_llm_eval_prompt(root, result)
     try:
         if resolved_provider == "openai":
-            text = call_openai_responses(os.environ[resolved_api_key_env], resolved_model, instructions, prompt, max_output_tokens)
+            llm_response = call_openai_responses(os.environ[resolved_api_key_env], resolved_model, instructions, prompt, max_output_tokens)
         else:
-            text = call_openai_compatible_chat(
+            llm_response = call_openai_compatible_chat(
                 api_key=os.environ[resolved_api_key_env],
                 base_url=resolved_base_url,
                 provider_name="GLM",
@@ -1522,8 +1551,20 @@ def run_llm_eval(
     except RuntimeError as error:
         return llm_eval_status("failed", resolved_provider, resolved_model, resolved_api_key_env, str(error))
     payload = llm_eval_status("completed", resolved_provider, resolved_model, resolved_api_key_env, "")
-    payload["response"] = text
+    payload["response"] = llm_response.text
+    payload["usage"] = llm_response.usage
+    payload["cost"] = llm_response.cost
     payload["prompt_version"] = "eval-llm-v2"
+    record_llm_usage(
+        root,
+        f"eval-{result.get('mode', 'wiki')}",
+        resolved_provider,
+        resolved_model,
+        llm_response,
+        artifact=str(result.get("answer_file") or result.get("target") or ""),
+        question=str(result.get("question") or ""),
+        metadata={"prompt_version": "eval-llm-v2"},
+    )
     return payload
 
 
@@ -2752,12 +2793,19 @@ def render_eval_signals(signals: list[dict[str, object]], language: str) -> str:
 def render_llm_frontmatter(result: dict[str, object]) -> str:
     llm = result.get("llm_assisted")
     if not isinstance(llm, dict):
-        return "llm_assisted: false\nllm_provider:\nllm_model:\nllm_status:"
+        return (
+            "llm_assisted: false\n"
+            "llm_provider:\n"
+            "llm_model:\n"
+            "llm_status:\n"
+            f"{llm_usage_frontmatter(None, None)}"
+        )
     return (
         "llm_assisted: true\n"
         f"llm_provider: {llm.get('provider', '')}\n"
         f"llm_model: {llm.get('model', '')}\n"
-        f"llm_status: {llm.get('status', '')}"
+        f"llm_status: {llm.get('status', '')}\n"
+        f"{llm_usage_frontmatter(llm.get('usage') if isinstance(llm.get('usage'), dict) else None, llm.get('cost') if isinstance(llm.get('cost'), dict) else None)}"
     )
 
 
@@ -2775,6 +2823,9 @@ def render_llm_assisted_section(result: dict[str, object], language: str) -> str
         response = f"- {reason}" if reason else "- No LLM response was produced."
     source_file = str(llm.get("source_file", "") or "")
     source_line = f"- Source file: `{source_file}`\n" if source_file else ""
+    usage = llm.get("usage") if isinstance(llm.get("usage"), dict) else None
+    cost = llm.get("cost") if isinstance(llm.get("cost"), dict) else None
+    usage_lines = llm_usage_bullets(usage, cost) if usage or cost else "- Usage: unavailable"
     return f"""
 {heading}
 
@@ -2783,6 +2834,7 @@ def render_llm_assisted_section(result: dict[str, object], language: str) -> str
 - Status: `{status}`
 - Evaluated at: {llm.get('evaluated_at', '-')}
 {source_line}
+{usage_lines}
 
 {response}
 """
@@ -2807,6 +2859,583 @@ def jsonable(value: object) -> object:
     if isinstance(value, tuple):
         return [jsonable(item) for item in value]
     return value
+
+
+def iso_now() -> str:
+    return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def env_fragment(value: str) -> str:
+    fragment = re.sub(r"[^A-Z0-9]+", "_", value.upper()).strip("_")
+    return fragment or "UNKNOWN"
+
+
+def llm_usage_from_response(provider: str, model: str, data: dict[str, object]) -> dict[str, object]:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return {
+            "status": "unavailable",
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "raw": {},
+            "provider": provider,
+            "model": model,
+        }
+    input_tokens = first_int(usage, ("input_tokens", "prompt_tokens"))
+    output_tokens = first_int(usage, ("output_tokens", "completion_tokens"))
+    total_tokens = first_int(usage, ("total_tokens",))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    return {
+        "status": "reported" if any(value is not None for value in (input_tokens, output_tokens, total_tokens)) else "unavailable",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "raw": jsonable(usage),
+        "provider": provider,
+        "model": model,
+    }
+
+
+def first_int(data: dict[str, object], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = int_or_none(data.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def usage_price_env_names(provider: str, model: str, direction: str) -> list[str]:
+    provider_key = env_fragment(provider)
+    model_key = env_fragment(model)
+    return [
+        f"CWIKI_COST_{provider_key}_{model_key}_{direction}_PER_1M",
+        f"CWIKI_COST_{provider_key}_{direction}_PER_1M",
+        f"CWIKI_COST_{direction}_PER_1M",
+    ]
+
+
+def usage_currency_env_names(provider: str, model: str) -> list[str]:
+    provider_key = env_fragment(provider)
+    model_key = env_fragment(model)
+    return [
+        f"CWIKI_COST_{provider_key}_{model_key}_CURRENCY",
+        f"CWIKI_COST_{provider_key}_CURRENCY",
+        "CWIKI_COST_CURRENCY",
+    ]
+
+
+def first_float_env(names: list[str]) -> tuple[float | None, str]:
+    for name in names:
+        value = os.environ.get(name)
+        if value is None or value.strip() == "":
+            continue
+        try:
+            return float(value), name
+        except ValueError as error:
+            raise RuntimeError(f"Invalid cost rate for {name}: {value}") from error
+    return None, ""
+
+
+def first_str_env(names: list[str], default: str) -> tuple[str, str]:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value.strip():
+            return value.strip(), name
+    return default, ""
+
+
+def estimate_llm_cost(provider: str, model: str, usage: dict[str, object]) -> dict[str, object]:
+    input_tokens = int_or_none(usage.get("input_tokens"))
+    output_tokens = int_or_none(usage.get("output_tokens"))
+    total_tokens = int_or_none(usage.get("total_tokens"))
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return {
+            "status": "unavailable",
+            "currency": first_str_env(usage_currency_env_names(provider, model), "USD")[0],
+            "input_cost": None,
+            "output_cost": None,
+            "total_cost": None,
+            "rates": {},
+        }
+
+    currency, currency_env = first_str_env(usage_currency_env_names(provider, model), "USD")
+    input_rate, input_rate_env = first_float_env(usage_price_env_names(provider, model, "INPUT"))
+    output_rate, output_rate_env = first_float_env(usage_price_env_names(provider, model, "OUTPUT"))
+    total_rate, total_rate_env = first_float_env(usage_price_env_names(provider, model, "TOTAL"))
+
+    rates: dict[str, object] = {}
+    if input_rate is not None:
+        rates["input_per_1m"] = input_rate
+        rates["input_env"] = input_rate_env
+    if output_rate is not None:
+        rates["output_per_1m"] = output_rate
+        rates["output_env"] = output_rate_env
+    if total_rate is not None:
+        rates["total_per_1m"] = total_rate
+        rates["total_env"] = total_rate_env
+    if currency_env:
+        rates["currency_env"] = currency_env
+
+    input_cost = round(input_tokens * input_rate / 1_000_000, 8) if input_tokens is not None and input_rate is not None else None
+    output_cost = round(output_tokens * output_rate / 1_000_000, 8) if output_tokens is not None and output_rate is not None else None
+    total_cost = None
+    if input_cost is not None or output_cost is not None:
+        total_cost = round((input_cost or 0.0) + (output_cost or 0.0), 8)
+    elif total_tokens is not None and total_rate is not None:
+        total_cost = round(total_tokens * total_rate / 1_000_000, 8)
+
+    if total_cost is None:
+        status = "unconfigured"
+    elif (
+        (input_tokens is None or input_rate is not None)
+        and (output_tokens is None or output_rate is not None)
+        and (input_tokens is not None or output_tokens is not None or total_rate is not None)
+    ):
+        status = "estimated"
+    else:
+        status = "partial"
+    return {
+        "status": status,
+        "currency": currency,
+        "input_cost": input_cost,
+        "output_cost": output_cost,
+        "total_cost": total_cost,
+        "rates": rates,
+    }
+
+
+def usage_dir(root: Path) -> Path:
+    return root / ".cwiki" / "usage"
+
+
+def usage_ledger_file(root: Path) -> Path:
+    return usage_dir(root) / "llm-usage.jsonl"
+
+
+def append_usage_record(root: Path, record: dict[str, object]) -> None:
+    path = usage_ledger_file(root)
+    ensure_dir(path.parent)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(jsonable(record), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def usage_record_id(operation: str, provider: str, model: str, question: str, artifact: str) -> str:
+    seed = f"{iso_now()}|{operation}|{provider}|{model}|{question}|{artifact}"
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
+    return f"{timestamp()}-{slugify(operation) or 'llm'}-{digest}"
+
+
+def record_llm_usage(
+    root: Path,
+    operation: str,
+    provider: str,
+    model: str,
+    response: LLMResponse,
+    artifact: str = "",
+    question: str = "",
+    prompt_file: str = "",
+    status: str = "completed",
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    artifact_display = normalize_usage_path(root, artifact)
+    prompt_display = normalize_usage_path(root, prompt_file)
+    record = {
+        "id": usage_record_id(operation, provider, model, question, artifact_display or prompt_display),
+        "recorded_at": iso_now(),
+        "operation": operation,
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "artifact": artifact_display,
+        "question": question,
+        "prompt_file": prompt_display,
+        "usage": response.usage,
+        "cost": response.cost,
+        "metadata": metadata or {},
+    }
+    append_usage_record(root, record)
+    return record
+
+
+def normalize_usage_path(root: Path, value: str | Path) -> str:
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.is_absolute():
+        path = root / path
+    return display_path(path, root)
+
+
+def token_display(value: object) -> str:
+    number = int_or_none(value)
+    return str(number) if number is not None else "unknown"
+
+
+def cost_display(cost: dict[str, object]) -> str:
+    total = cost.get("total_cost")
+    if isinstance(total, (int, float)):
+        currency = str(cost.get("currency") or "USD")
+        return f"{total:.6f} {currency}"
+    return "unknown"
+
+
+def llm_usage_line(usage: dict[str, object], cost: dict[str, object]) -> str:
+    cost_total = cost.get("total_cost")
+    cost_text = "unknown"
+    if isinstance(cost_total, (int, float)):
+        cost_text = f"{cost_total:.6f} {cost.get('currency') or 'USD'}"
+    return (
+        "LLM usage: "
+        f"input={token_display(usage.get('input_tokens'))} "
+        f"output={token_display(usage.get('output_tokens'))} "
+        f"total={token_display(usage.get('total_tokens'))} "
+        f"cost={cost_text} "
+        f"({cost.get('status', 'unknown')})"
+    )
+
+
+def llm_usage_frontmatter(usage: dict[str, object] | None, cost: dict[str, object] | None) -> str:
+    usage = usage or {}
+    cost = cost or {}
+    total_cost = cost.get("total_cost")
+    total_cost_value = f"{float(total_cost):.8f}" if isinstance(total_cost, (int, float)) else ""
+    return (
+        f"llm_input_tokens: {frontmatter_scalar(usage.get('input_tokens'))}\n"
+        f"llm_output_tokens: {frontmatter_scalar(usage.get('output_tokens'))}\n"
+        f"llm_total_tokens: {frontmatter_scalar(usage.get('total_tokens'))}\n"
+        f"llm_cost_status: {cost.get('status', '')}\n"
+        f"llm_estimated_cost: {total_cost_value}\n"
+        f"llm_cost_currency: {cost.get('currency', '')}"
+    )
+
+
+def frontmatter_scalar(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def llm_usage_bullets(usage: dict[str, object] | None, cost: dict[str, object] | None) -> str:
+    usage = usage or {}
+    cost = cost or {}
+    total_cost = cost.get("total_cost")
+    if isinstance(total_cost, (int, float)):
+        cost_value = f"{total_cost:.6f} {cost.get('currency') or 'USD'}"
+    else:
+        cost_value = "unknown"
+    return (
+        f"- Input tokens: {token_display(usage.get('input_tokens'))}\n"
+        f"- Output tokens: {token_display(usage.get('output_tokens'))}\n"
+        f"- Total tokens: {token_display(usage.get('total_tokens'))}\n"
+        f"- Cost status: {cost.get('status', 'unknown')}\n"
+        f"- Estimated cost: {cost_value}"
+    )
+
+
+def read_usage_records(root: Path) -> list[dict[str, object]]:
+    path = usage_ledger_file(root)
+    if not path.exists():
+        return []
+    records: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+    return records
+
+
+def parse_usage_time(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError as error:
+        raise RuntimeError(f"Invalid date/time filter: {value}") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed
+
+
+def record_time(record: dict[str, object]) -> dt.datetime | None:
+    value = record.get("recorded_at")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed
+
+
+def filter_usage_records(
+    records: list[dict[str, object]],
+    operation: str | None = None,
+    artifact: str | None = None,
+    question: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[dict[str, object]]:
+    since_time = parse_usage_time(since)
+    until_time = parse_usage_time(until)
+    filtered: list[dict[str, object]] = []
+    for record in records:
+        if operation and str(record.get("operation", "")) != operation:
+            continue
+        if artifact and artifact not in str(record.get("artifact", "")) and artifact not in str(record.get("prompt_file", "")):
+            continue
+        if question and question not in str(record.get("question", "")):
+            continue
+        if provider and str(record.get("provider", "")) != provider:
+            continue
+        if model and str(record.get("model", "")) != model:
+            continue
+        seen_at = record_time(record)
+        if since_time and seen_at and seen_at < since_time:
+            continue
+        if until_time and seen_at and seen_at > until_time:
+            continue
+        filtered.append(record)
+    return filtered
+
+
+def usage_summary(records: list[dict[str, object]]) -> dict[str, object]:
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    unknown_token_records = 0
+    costs_by_currency: dict[str, float] = {}
+    by_operation: dict[str, dict[str, object]] = {}
+    for record in records:
+        usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+        cost = record.get("cost") if isinstance(record.get("cost"), dict) else {}
+        in_tokens = int_or_none(usage.get("input_tokens")) if isinstance(usage, dict) else None
+        out_tokens = int_or_none(usage.get("output_tokens")) if isinstance(usage, dict) else None
+        total = int_or_none(usage.get("total_tokens")) if isinstance(usage, dict) else None
+        if in_tokens is None and out_tokens is None and total is None:
+            unknown_token_records += 1
+        input_tokens += in_tokens or 0
+        output_tokens += out_tokens or 0
+        total_tokens += total if total is not None else (in_tokens or 0) + (out_tokens or 0)
+        currency = str(cost.get("currency") or "USD") if isinstance(cost, dict) else "USD"
+        total_cost = cost.get("total_cost") if isinstance(cost, dict) else None
+        if isinstance(total_cost, (int, float)):
+            costs_by_currency[currency] = round(costs_by_currency.get(currency, 0.0) + float(total_cost), 8)
+        operation = str(record.get("operation") or "unknown")
+        bucket = by_operation.setdefault(
+            operation,
+            {"records": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "costs_by_currency": {}},
+        )
+        bucket["records"] = int(bucket["records"]) + 1
+        bucket["input_tokens"] = int(bucket["input_tokens"]) + (in_tokens or 0)
+        bucket["output_tokens"] = int(bucket["output_tokens"]) + (out_tokens or 0)
+        bucket["total_tokens"] = int(bucket["total_tokens"]) + (total if total is not None else (in_tokens or 0) + (out_tokens or 0))
+        if isinstance(total_cost, (int, float)):
+            operation_costs = bucket["costs_by_currency"]
+            if isinstance(operation_costs, dict):
+                operation_costs[currency] = round(float(operation_costs.get(currency, 0.0)) + float(total_cost), 8)
+    return {
+        "records": len(records),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "unknown_token_records": unknown_token_records,
+        "costs_by_currency": costs_by_currency,
+        "by_operation": by_operation,
+    }
+
+
+def render_costs(costs_by_currency: dict[str, float]) -> str:
+    if not costs_by_currency:
+        return "unknown"
+    return ", ".join(f"{amount:.6f} {currency}" for currency, amount in sorted(costs_by_currency.items()))
+
+
+def usage_records_table(records: list[dict[str, object]]) -> str:
+    if not records:
+        return "- No usage records matched."
+    lines = ["| Time | Operation | Provider | Model | Tokens | Cost | Artifact |", "|---|---|---|---|---:|---:|---|"]
+    for record in records:
+        usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+        cost = record.get("cost") if isinstance(record.get("cost"), dict) else {}
+        tokens = token_display(usage.get("total_tokens")) if isinstance(usage, dict) else "unknown"
+        cost_text = "unknown"
+        if isinstance(cost, dict) and isinstance(cost.get("total_cost"), (int, float)):
+            cost_text = f"{float(cost['total_cost']):.6f} {cost.get('currency') or 'USD'}"
+        artifact = str(record.get("artifact") or record.get("prompt_file") or "")
+        if len(artifact) > 80:
+            artifact = artifact[:77] + "..."
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(record.get("recorded_at", "")),
+                    str(record.get("operation", "")),
+                    str(record.get("provider", "")),
+                    str(record.get("model", "")),
+                    tokens,
+                    cost_text,
+                    artifact or "-",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def render_usage_report(records: list[dict[str, object]], filters: dict[str, object], json_output: bool = False) -> str:
+    summary = usage_summary(records)
+    payload = {
+        "generated_at": iso_now(),
+        "filters": {key: value for key, value in filters.items() if value not in (None, "")},
+        "summary": summary,
+        "records": records,
+    }
+    if json_output:
+        return json.dumps(jsonable(payload), ensure_ascii=False, indent=2)
+    filter_lines = "\n".join(f"- {key}: `{value}`" for key, value in payload["filters"].items()) or "- none"
+    by_operation = summary.get("by_operation", {})
+    if isinstance(by_operation, dict) and by_operation:
+        operation_lines = ["| Operation | Records | Input | Output | Total | Cost |", "|---|---:|---:|---:|---:|---:|"]
+        for operation, item in sorted(by_operation.items()):
+            costs = item.get("costs_by_currency") if isinstance(item, dict) else {}
+            operation_lines.append(
+                f"| {operation} | {item.get('records', 0)} | {item.get('input_tokens', 0)} | "
+                f"{item.get('output_tokens', 0)} | {item.get('total_tokens', 0)} | "
+                f"{render_costs(costs if isinstance(costs, dict) else {})} |"
+            )
+        operation_table = "\n".join(operation_lines)
+    else:
+        operation_table = "- No usage records."
+    return f"""# LLM Usage Cost Report
+
+Generated at: {payload['generated_at']}
+
+## Filters
+
+{filter_lines}
+
+## Summary
+
+- Records: {summary['records']}
+- Input tokens: {summary['input_tokens']}
+- Output tokens: {summary['output_tokens']}
+- Total tokens: {summary['total_tokens']}
+- Records with unknown tokens: {summary['unknown_token_records']}
+- Estimated cost: {render_costs(summary['costs_by_currency'] if isinstance(summary['costs_by_currency'], dict) else {})}
+
+## By Operation
+
+{operation_table}
+
+## Records
+
+{usage_records_table(records)}
+"""
+
+
+def usage_report_wiki(
+    target: str,
+    operation: str | None,
+    artifact: str | None,
+    question: str | None,
+    provider: str | None,
+    model: str | None,
+    since: str | None,
+    until: str | None,
+    json_output: bool,
+) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    load_local_env(root)
+    filters = {
+        "operation": operation,
+        "artifact": artifact,
+        "question": question,
+        "provider": provider,
+        "model": model,
+        "since": since,
+        "until": until,
+    }
+    records = filter_usage_records(read_usage_records(root), operation, artifact, question, provider, model, since, until)
+    print(render_usage_report(records, filters, json_output))
+
+
+def manual_usage_log_wiki(
+    target: str,
+    operation: str,
+    provider: str,
+    model: str,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    total_tokens: int | None,
+    estimated_cost: float | None,
+    currency: str,
+    artifact: str | None,
+    question: str | None,
+    status: str,
+    metadata_json: str | None,
+) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    load_local_env(root)
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    usage = {
+        "status": "reported" if any(value is not None for value in (input_tokens, output_tokens, total_tokens)) else "unavailable",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "raw": {},
+        "provider": provider,
+        "model": model,
+    }
+    cost = estimate_llm_cost(provider, model, usage)
+    if estimated_cost is not None:
+        cost = {
+            "status": "provided",
+            "currency": currency,
+            "input_cost": None,
+            "output_cost": None,
+            "total_cost": estimated_cost,
+            "rates": {},
+        }
+    metadata: dict[str, object] = {"recorded_by": "usage-log"}
+    if metadata_json:
+        try:
+            extra = json.loads(metadata_json)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"Invalid --metadata-json: {error}") from error
+        if not isinstance(extra, dict):
+            raise RuntimeError("--metadata-json must decode to an object.")
+        metadata.update(extra)
+    record = record_llm_usage(
+        root,
+        operation,
+        provider,
+        model,
+        LLMResponse("", usage, cost),
+        artifact or "",
+        question or "",
+        "",
+        status,
+        metadata,
+    )
+    print(f"Recorded usage: {record['id']}")
+    print(llm_usage_line(usage, cost))
 
 
 def render_eval_warnings(warnings: list[dict[str, str]], language: str) -> str:
@@ -3592,9 +4221,9 @@ def maybe_llm_graph_rerank(
     )
     try:
         if resolved_provider == "openai":
-            text = call_openai_responses(api_key, resolved_model, instructions, prompt, max_output_tokens)
+            llm_response = call_openai_responses(api_key, resolved_model, instructions, prompt, max_output_tokens)
         else:
-            text = call_openai_compatible_chat(
+            llm_response = call_openai_compatible_chat(
                 api_key=api_key,
                 base_url=resolved_base_url,
                 provider_name="GLM",
@@ -3610,9 +4239,24 @@ def maybe_llm_graph_rerank(
         status["model"] = resolved_model
         return ordered_slugs, status
 
-    reranked, status = apply_llm_graph_rerank(ordered_slugs, text)
+    reranked, status = apply_llm_graph_rerank(ordered_slugs, llm_response.text)
     status["provider"] = resolved_provider
     status["model"] = resolved_model
+    status["usage"] = llm_response.usage
+    status["cost"] = llm_response.cost
+    record_llm_usage(
+        root,
+        "graph-rerank",
+        resolved_provider,
+        resolved_model,
+        llm_response,
+        question=question,
+        metadata={
+            "retrieval_strategy": strategy,
+            "candidate_count": len(ordered_slugs),
+            "prompt_version": "graph-rerank-v1",
+        },
+    )
     return reranked, status
 
 
@@ -3798,6 +4442,9 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
     )
     rerank_gaps = rerank.get("gaps") if isinstance(rerank, dict) else []
     rerank_gap_lines = "\n".join(f"- {gap}" for gap in rerank_gaps) if isinstance(rerank_gaps, list) and rerank_gaps else "- None"
+    rerank_usage = rerank.get("usage") if isinstance(rerank.get("usage"), dict) else None
+    rerank_cost = rerank.get("cost") if isinstance(rerank.get("cost"), dict) else None
+    rerank_usage_lines = llm_usage_bullets(rerank_usage, rerank_cost) if rerank_usage or rerank_cost else "- Usage: unavailable"
     return f"""## Retrieval Trace
 
 - Requested strategy: {trace.get('requested_strategy', 'auto')}
@@ -3831,6 +4478,7 @@ def render_retrieval_trace(trace: dict[str, object]) -> str:
 
 - Provider: `{rerank.get('provider') or '-'}`
 - Model: `{rerank.get('model') or '-'}`
+{rerank_usage_lines}
 
 Selected:
 
@@ -4729,9 +5377,9 @@ def answer_wiki(
         "Do not invent facts outside the context pack."
     )
     if provider == "openai":
-        answer = call_openai_responses(api_key, model, instructions, prompt, max_output_tokens)
+        llm_response = call_openai_responses(api_key, model, instructions, prompt, max_output_tokens)
     else:
-        answer = call_openai_compatible_chat(
+        llm_response = call_openai_compatible_chat(
             api_key=api_key,
             base_url=base_url,
             provider_name="GLM",
@@ -4740,12 +5388,26 @@ def answer_wiki(
             prompt=prompt,
             max_output_tokens=max_output_tokens,
         )
+    answer = llm_response.text
     health_warnings = answer_health_warnings(answer)
-    answer_file = write_answer_file(root, question, answer, prompt_file, hits, provider, model, health_warnings)
+    answer_file = write_answer_file(root, question, answer, prompt_file, hits, provider, model, health_warnings, llm_response.usage, llm_response.cost)
+    record_llm_usage(
+        root,
+        "answer",
+        provider,
+        model,
+        llm_response,
+        artifact=answer_file.as_posix(),
+        question=question,
+        prompt_file=prompt_file.as_posix(),
+        status="suspicious" if health_warnings else "completed",
+        metadata={"retrieval": retrieval, "graph_rerank": graph_rerank},
+    )
 
     print(answer)
     print(f"\nSaved answer: {answer_file.relative_to(root).as_posix()}")
     print(f"Query prompt: {prompt_file.relative_to(root).as_posix()}")
+    print(llm_usage_line(llm_response.usage, llm_response.cost))
     if health_warnings:
         print("\nAnswer may be truncated; please retry.", file=sys.stderr)
         for item in health_warnings:
@@ -4794,7 +5456,7 @@ def resolve_base_url(provider: str, base_url: str | None) -> str:
     return "https://api.openai.com/v1"
 
 
-def call_openai_responses(api_key: str, model: str, instructions: str, prompt: str, max_output_tokens: int) -> str:
+def call_openai_responses(api_key: str, model: str, instructions: str, prompt: str, max_output_tokens: int) -> LLMResponse:
     payload = {
         "model": model,
         "instructions": instructions,
@@ -4822,7 +5484,8 @@ def call_openai_responses(api_key: str, model: str, instructions: str, prompt: s
     text = extract_response_text(data)
     if not text:
         raise RuntimeError("OpenAI API returned no text output.")
-    return text
+    usage = llm_usage_from_response("openai", model, data)
+    return LLMResponse(text, usage, estimate_llm_cost("openai", model, usage))
 
 
 def call_openai_compatible_chat(
@@ -4834,7 +5497,7 @@ def call_openai_compatible_chat(
     prompt: str,
     max_output_tokens: int,
     extra_payload: dict[str, object] | None = None,
-) -> str:
+) -> LLMResponse:
     payload = {
         "model": model,
         "messages": [
@@ -4867,7 +5530,9 @@ def call_openai_compatible_chat(
     text = extract_chat_completion_text(data)
     if not text:
         raise RuntimeError(f"{provider_name} API returned no text output. {chat_completion_shape_hint(data)}")
-    return text
+    provider = provider_name.lower()
+    usage = llm_usage_from_response(provider, model, data)
+    return LLMResponse(text, usage, estimate_llm_cost(provider, model, usage))
 
 
 def append_chat_content(chunks: list[str], value: object) -> None:
@@ -4953,6 +5618,8 @@ def write_answer_file(
     provider: str,
     model: str,
     health_warnings: list[str] | None = None,
+    usage: dict[str, object] | None = None,
+    cost: dict[str, object] | None = None,
 ) -> Path:
     date = today()
     slug = slugify(question)
@@ -4986,6 +5653,7 @@ updated: {date}
 status: {status}
 provider: {provider}
 model: {model}
+{llm_usage_frontmatter(usage, cost)}
 answer_health: {health_status}
 health_warnings:
 {health_frontmatter}
@@ -5004,6 +5672,10 @@ health_warnings:
 ## Relevant Pages
 
 {relevant_pages}
+
+## LLM Usage
+
+{llm_usage_bullets(usage, cost)}
 
 ## Query Prompt
 
@@ -5280,6 +5952,7 @@ Follow `WIKI_SCHEMA.md`:
 6. Add bidirectional wikilinks where appropriate.
 7. Run `cwiki index .`.
 8. Append to `wiki/log.md`.
+9. If the agent platform exposes token or cost numbers for this ingest, record them with `cwiki usage-log . --operation ingest --provider agent-platform --model <visible-model-name> ...`.
 
 Final note must include:
 
@@ -5287,6 +5960,7 @@ Final note must include:
 - Pages updated
 - What changed in `wiki/overview.md`
 - What changed in `wiki/synthesis.md`
+- Whether platform-model usage was recorded or unavailable
 """,
         encoding="utf-8",
     )
@@ -5310,6 +5984,8 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki eval-answer . .cwiki/answers/answer-example.md
   cwiki eval-all . --json
   cwiki eval-schedule . --every-days 7 --llm
+  cwiki usage-report .
+  cwiki usage-log . --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
   cwiki graph-report .
   cwiki path . retrieval synthesis
   cwiki search . "retrieval"
@@ -5407,6 +6083,32 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("dir")
     search_parser.add_argument("query", nargs="+")
 
+    usage_report_parser = subparsers.add_parser("usage-report", help="Report LLM token usage and estimated cost")
+    usage_report_parser.add_argument("dir")
+    usage_report_parser.add_argument("--operation", default=None)
+    usage_report_parser.add_argument("--artifact", default=None, help="Filter by answer, prompt, eval, or other artifact path substring")
+    usage_report_parser.add_argument("--question", default=None, help="Filter by question substring")
+    usage_report_parser.add_argument("--provider", default=None)
+    usage_report_parser.add_argument("--model", default=None)
+    usage_report_parser.add_argument("--since", default=None, help="ISO date/time lower bound, for example 2026-05-18 or 2026-05-18T10:00:00")
+    usage_report_parser.add_argument("--until", default=None, help="ISO date/time upper bound")
+    usage_report_parser.add_argument("--json", action="store_true")
+
+    usage_log_parser = subparsers.add_parser("usage-log", help="Manually record external or agent-platform LLM usage")
+    usage_log_parser.add_argument("dir")
+    usage_log_parser.add_argument("--operation", required=True, help="Workflow step, for example ingest, update, answer, eval, web-research")
+    usage_log_parser.add_argument("--provider", default="agent-platform")
+    usage_log_parser.add_argument("--model", default="current-agent-model")
+    usage_log_parser.add_argument("--input-tokens", type=int, default=None)
+    usage_log_parser.add_argument("--output-tokens", type=int, default=None)
+    usage_log_parser.add_argument("--total-tokens", type=int, default=None)
+    usage_log_parser.add_argument("--estimated-cost", type=float, default=None)
+    usage_log_parser.add_argument("--currency", default="USD")
+    usage_log_parser.add_argument("--artifact", default=None)
+    usage_log_parser.add_argument("--question", default=None)
+    usage_log_parser.add_argument("--status", default="completed")
+    usage_log_parser.add_argument("--metadata-json", default=None)
+
     ask_parser = subparsers.add_parser("ask", help="Create a query prompt from wiki context")
     ask_parser.add_argument("dir")
     ask_parser.add_argument("question", nargs="+")
@@ -5500,6 +6202,34 @@ def main(argv: list[str] | None = None) -> int:
             explain_wiki_node(args.dir, args.slug)
         elif args.command == "search":
             search_wiki(args.dir, " ".join(args.query))
+        elif args.command == "usage-report":
+            usage_report_wiki(
+                args.dir,
+                args.operation,
+                args.artifact,
+                args.question,
+                args.provider,
+                args.model,
+                args.since,
+                args.until,
+                args.json,
+            )
+        elif args.command == "usage-log":
+            manual_usage_log_wiki(
+                args.dir,
+                args.operation,
+                args.provider,
+                args.model,
+                args.input_tokens,
+                args.output_tokens,
+                args.total_tokens,
+                args.estimated_cost,
+                args.currency,
+                args.artifact,
+                args.question,
+                args.status,
+                args.metadata_json,
+            )
         elif args.command == "ask":
             ask_wiki(
                 args.dir,

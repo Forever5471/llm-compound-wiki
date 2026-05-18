@@ -30,6 +30,7 @@ Ingest turns raw evidence into compiled wiki pages.
 10. Add `[[wikilinks]]` in both directions when pages clearly relate.
 11. Run `cwiki index .`.
 12. Append to `wiki/log.md`.
+13. If the agent platform shows token or cost numbers for this ingest, record them with `cwiki usage-log . --operation ingest --provider agent-platform --model <visible-model-name> ...`.
 
 ## Required Output
 
@@ -42,5 +43,6 @@ Tell the user:
 - what changed in `wiki/synthesis.md`
 - important contradictions or uncertainty
 - any follow-up sources worth adding
+- whether platform-model usage was recorded or unavailable
 
 Never modify files under `raw/`.

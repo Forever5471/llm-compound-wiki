@@ -95,6 +95,7 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 │   └── .agents/skills/       兼容其他 agent 的入口
 ├── raw/                      用户私有原始材料，默认不进 git
 ├── .cwiki/prompts/           生成的 ingest 工作提示，默认不进 git
+├── .cwiki/usage/             本地 LLM 用量台账，默认不进 git
 ├── wiki/
 │   ├── overview.md           整个知识库的全局地图
 │   ├── synthesis.md          跨来源综合结论
@@ -212,6 +213,8 @@ cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
+cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
+cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -260,6 +263,49 @@ cwiki eval-all . --answer .cwiki/answers/answer.md --agent-eval-file .cwiki/eval
 
 报告会记录 `provider: agent-platform`、传入的模型名、时间戳和辅助评估来源文件。`cwiki eval-schedule . --every-days 7 --llm` 适合终端/CLI 模型评估；如果是 agent 平台周期任务，应让平台 automation 先运行确定性 eval，再用 `--agent-eval-file` 附加当前 agent 模型写出的辅助评估。
 
+## LLM 用量与成本报告
+
+只要 CLI 自己调用 `.env` 或命令行配置的大模型，就会把 token usage 和成本元数据记录到 `.cwiki/usage/llm-usage.jsonl`。当前自动覆盖这些环节：
+
+- `answer`
+- `ask --graph-rerank`
+- `answer --graph-rerank`
+- `eval --llm`、`eval-answer --llm`、`eval-all --llm`，以及开启 `--llm` 的 scheduled eval
+
+成本只会基于你在 `.env` 中配置的单价估算，项目不会写死任何供应商价格。可以配置通用单价、provider 单价，或 provider+model 单价：
+
+```bash
+# 每 100 万 token 的价格
+CWIKI_COST_INPUT_PER_1M=0
+CWIKI_COST_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_INPUT_PER_1M=0
+CWIKI_COST_GLM_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+CWIKI_COST_CURRENCY=USD
+```
+
+生成完整报告：
+
+```bash
+cwiki usage-report .
+```
+
+也可以按环节、问题、产物、模型或时间窗口过滤：
+
+```bash
+cwiki usage-report . --operation answer
+cwiki usage-report . --question "gray_zone"
+cwiki usage-report . --artifact .cwiki/answers/answer-example.md
+cwiki usage-report . --since 2026-05-18 --json
+```
+
+agent 平台不会自动把内部 token 计数暴露给这个 CLI。当 agent 使用当前平台模型做 ingest、update、浏览器研究、解释判断或外部辅助评估时，如果平台界面能看到 token 或费用，需要用 `usage-log` 补记：
+
+```bash
+cwiki usage-log . --operation ingest --provider agent-platform --model current-agent-model --input-tokens 12000 --output-tokens 1800 --estimated-cost 0.05 --currency USD --artifact wiki/synthesis.md
+```
+
 ## 模型配置
 
 初始化后的 wiki 会带有 `.env.example`。把它复制成项目目录或具体 wiki 目录下的本地 `.env`；`.env` 默认不进 git，适合放 API key：
@@ -282,6 +328,15 @@ OPENAI_API_KEY=your-local-key
 # CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
 # CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 # CWIKI_GRAPH_RERANK_THINKING=disabled
+
+# 可选 token 成本单价。数值含义是每 100 万 token 的价格；项目不会写死默认价格。
+# CWIKI_COST_INPUT_PER_1M=0
+# CWIKI_COST_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_INPUT_PER_1M=0
+# CWIKI_COST_GLM_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+# CWIKI_COST_CURRENCY=USD
 
 # web-ask 默认策略
 CWIKI_WEB_WIKI_WEIGHT=0.6

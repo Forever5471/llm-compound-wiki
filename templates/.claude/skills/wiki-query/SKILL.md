@@ -25,6 +25,7 @@ Do not answer from memory first. The compiled wiki is the working source of trut
 8. Answer with `## Evidence Used`, `## Answer`, and `## Gaps`.
 9. Cite local pages like `[[topic]]` and keep source paths or URLs close to factual claims.
 10. Offer to save substantial synthesis into the appropriate wiki location.
+11. If the agent platform shows token or cost numbers for this platform-model answer, record them with `cwiki usage-log . --operation agent-answer --provider agent-platform --model <visible-model-name> ...`.
 
 If the user accepts saving:
 

@@ -98,6 +98,7 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 │   └── .agents/skills/       Compatibility skill entrypoints
 ├── raw/                      Private immutable sources, ignored by git
 ├── .cwiki/prompts/           Generated ingest prompts, ignored by git
+├── .cwiki/usage/             Local LLM usage ledger, ignored by git
 ├── wiki/
 │   ├── overview.md           Durable map of the knowledge base
 │   ├── synthesis.md          Current integrated thesis
@@ -226,6 +227,8 @@ cwiki eval <dir> [--output <file>] [--no-write] [--json]
 cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
+cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
+cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
@@ -274,6 +277,49 @@ cwiki eval-all . --answer .cwiki/answers/answer.md --agent-eval-file .cwiki/eval
 
 The report records `provider: agent-platform`, the supplied model label, timestamp, and source file. Use `cwiki eval-schedule . --every-days 7 --llm` only for terminal/CLI model evaluation; for agent-platform scheduling, configure the platform automation to run deterministic eval and then attach the active agent model's assisted section with `--agent-eval-file`.
 
+## LLM Usage And Cost Reports
+
+Whenever the CLI itself calls a configured model, it records token usage and cost metadata under `.cwiki/usage/llm-usage.jsonl`. This currently covers:
+
+- `answer`
+- `ask --graph-rerank`
+- `answer --graph-rerank`
+- `eval --llm`, `eval-answer --llm`, `eval-all --llm`, and scheduled eval runs that enable `--llm`
+
+Cost is estimated only from rates you configure in `.env`; the project does not hardcode provider pricing. Set generic rates, provider-level rates, or provider+model rates:
+
+```bash
+# price per 1M tokens
+CWIKI_COST_INPUT_PER_1M=0
+CWIKI_COST_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_INPUT_PER_1M=0
+CWIKI_COST_GLM_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+CWIKI_COST_CURRENCY=USD
+```
+
+Generate a full report:
+
+```bash
+cwiki usage-report .
+```
+
+Narrow it to one workflow, question, artifact, model, or time window:
+
+```bash
+cwiki usage-report . --operation answer
+cwiki usage-report . --question "gray_zone"
+cwiki usage-report . --artifact .cwiki/answers/answer-example.md
+cwiki usage-report . --since 2026-05-18 --json
+```
+
+Agent platforms do not expose their internal token counters to this CLI automatically. When an agent uses its active platform model for ingest, update, browser research, interpretation, or an attached evaluation, record the visible usage with `usage-log`:
+
+```bash
+cwiki usage-log . --operation ingest --provider agent-platform --model current-agent-model --input-tokens 12000 --output-tokens 1800 --estimated-cost 0.05 --currency USD --artifact wiki/synthesis.md
+```
+
 ## Model Configuration
 
 Each initialized wiki includes `.env.example`. Copy it to a local `.env` in either this project directory or a specific wiki directory. `.env` is ignored by git and is the right place for API keys:
@@ -296,6 +342,15 @@ OPENAI_API_KEY=your-local-key
 # CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
 # CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 # CWIKI_GRAPH_RERANK_THINKING=disabled
+
+# Optional token cost rates. Values are price per 1M tokens; no defaults are hardcoded.
+# CWIKI_COST_INPUT_PER_1M=0
+# CWIKI_COST_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_INPUT_PER_1M=0
+# CWIKI_COST_GLM_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+# CWIKI_COST_CURRENCY=USD
 
 # web-ask defaults
 CWIKI_WEB_WIKI_WEIGHT=0.6

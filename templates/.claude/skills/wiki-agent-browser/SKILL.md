@@ -41,6 +41,7 @@ Use this skill when:
    - Sources
 11. Cite local evidence with `[[slug]]` and source paths from claim ledgers.
 12. Cite web evidence with Markdown links to the exact URLs used.
+13. If the agent platform shows token or cost numbers for browser research or synthesis, record them with `cwiki usage-log . --operation web-research --provider agent-platform --model <visible-model-name> ...`.
 
 ## Evidence Weights
 

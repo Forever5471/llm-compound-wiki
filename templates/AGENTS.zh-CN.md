@@ -68,6 +68,9 @@
 - `.env` 被 git 忽略，不应提交。
 - `.env` 只影响终端/CLI 工作流，例如 `cwiki answer`；不会改变当前 agent 平台正在使用的聊天模型。
 - `web-ask` 会读取 `.env` 中的 wiki/web 权重和来源数量默认值，但命令行参数优先。
+- CLI 会把 `answer`、图重排和 `--llm` evaluation 的模型用量自动记录到 `.cwiki/usage/llm-usage.jsonl`。
+- 如果当前 agent 平台能显示 ingest、update、浏览器研究、最终回答或其它平台模型工作的 token/费用，用 `cwiki usage-log . --operation <step> --provider agent-platform --model <visible-model-name> ...` 手动补记。
+- 需要完整成本报告时运行 `cwiki usage-report .`；可用 `--operation`、`--artifact`、`--question`、`--provider`、`--model`、`--since`、`--until` 过滤。
 - 对 agent 平台中的 LLM-assisted evaluation，应使用当前 agent 模型，而不是 `.env` 模型。先把辅助评估写到 `.cwiki/eval/agent-assisted-*.md`，再用 `--agent-eval-file <file> --agent-model <visible-model-name>` 附加进正式报告。
 
 ## 操作原则
