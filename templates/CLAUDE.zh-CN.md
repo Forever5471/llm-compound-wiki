@@ -79,6 +79,7 @@ LLM 负责创建页面、在新来源到来时更新页面、维护交叉引用�
 - `.env` 影响终端/CLI 流程，例如 `cwiki answer`；不会改变当前 agent 平台的聊天模型。
 - `cwiki answer` 使用配置的 provider/model 与本地 wiki 检索，但不执行实时联网搜索。
 - `web-ask` 读取 `.env` 中的 `CWIKI_WEB_WIKI_WEIGHT`、`CWIKI_WEB_WEIGHT`、`CWIKI_WEB_MAX_SOURCES`、`CWIKI_WEB_ENABLED` 等默认值；命令行参数优先。
+- `answer --web-on-gaps` 和 `eval-answer --web-on-gaps` 会识别需要外部证据的缺口，并生成 `.cwiki/web-gaps/`、`web-query-*`、`web-research-*`、`fusion-*` 产物。默认读取同一组 `CWIKI_WEB_*`，除非用 `--web-gap-*` 单次覆盖。
 - CLI 会把 `answer`、图重排和 `--llm` evaluation 的模型用量自动记录到 `.cwiki/usage/llm-usage.jsonl`。
 - 如果当前 agent 平台能显示 ingest、update、浏览器研究、最终回答或其它平台模型工作的 token/费用，用 `cwiki usage-log . --operation <step> --provider agent-platform --model <visible-model-name> ...` 手动补记。
 - 需要完整成本报告时运行 `cwiki usage-report .`；可用 `--operation`、`--artifact`、`--question`、`--provider`、`--model`、`--since`、`--until` 过滤。
@@ -179,6 +180,8 @@ wiki/             LLM 维护的编译知识层
 5. 将 web findings 写入 `.cwiki/web-research/*.md`。
 6. 最终答案分开写 local wiki evidence、web evidence、synthesis、gaps、sources。
 7. 重要 web 来源先 `cwiki capture`，再摄入 `wiki/`。
+
+如果已有答案或评估的 gaps 指出缺少案例、量化指标、最新事实或迁移/实施指南，先运行 `cwiki eval-answer . <answer-file> --web-on-gaps`。随后使用生成的 web gap report 和 fusion prompt 交接浏览器研究。
 
 ### Evaluation
 

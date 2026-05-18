@@ -64,6 +64,8 @@ CWIKI_WEB_ENABLED=true
 
 Command-line flags take precedence. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
+Use `cwiki answer . "<question>" --web-on-gaps` or `cwiki eval-answer . <answer-file> --web-on-gaps` when a draft answer's `## Gaps` section, deterministic warnings, or attached LLM-assisted evaluation says external evidence is missing. This creates `.cwiki/web-gaps/`, `web-query-*`, `web-research-*`, and `fusion-*` artifacts for a browser-capable agent. The follow-up respects `CWIKI_WEB_*` defaults; `--web-gap-*` flags override them for one run.
+
 The graph layer is deterministic and zero-dependency. It derives `.cwiki/graph/graph.json` and `.cwiki/graph/GRAPH_REPORT.md` from compiled wiki pages, frontmatter, claim ledgers, and `[[wikilinks]]`. It is a navigation and retrieval artifact, not a replacement for the canonical `wiki/` pages.
 
 LLM usage is recorded under `.cwiki/usage/llm-usage.jsonl` whenever the CLI itself calls a model for `answer`, graph rerank, or LLM-assisted evaluation. Cost estimates depend only on `CWIKI_COST_*` rates configured by the user. When an external agent platform uses its active model for ingest, update, browser research, or interpretation, record any visible token/cost numbers with `cwiki usage-log`; the CLI cannot read platform token counters automatically.

@@ -58,6 +58,7 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - Use `wiki-capture` before `wiki-ingest` when a source file or URL still needs to be recorded under `raw/captures/`.
 - For complex source formats, use the built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`.
 - For current web research that combines local wiki context with online evidence, use `wiki-agent-browser` and start with `cwiki web-ask . "<question>"`. Use `--web-weight 0` or `--no-web` when web search should be disabled.
+- If an answer or evaluation names external-evidence gaps such as missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps` or `cwiki answer . "<question>" --web-on-gaps` to create `.cwiki/web-gaps/`, web research, and fusion prompt artifacts.
 
 ## Local Configuration
 
@@ -68,6 +69,7 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - `cwiki answer` uses the configured provider/model and local wiki retrieval, but it does not perform live web search.
 - `web-ask` reads `.env` defaults for wiki/web evidence weights and source limits, but command-line flags take precedence.
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
+- `--web-on-gaps` uses the same `CWIKI_WEB_*` defaults and supports one-run overrides with `--web-gap-max-sources`, `--web-gap-wiki-weight`, and `--web-gap-web-weight`.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
 - The CLI automatically records model usage for `answer`, graph rerank, and `--llm` evaluation under `.cwiki/usage/llm-usage.jsonl`.

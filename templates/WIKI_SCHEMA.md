@@ -177,6 +177,8 @@ Use this when a question needs current web evidence in addition to the compiled 
 10. Cite local pages as `[[topic]]`; cite web facts with exact URLs and access dates.
 11. If web evidence should become durable wiki knowledge, capture the URL with `cwiki capture`, then ingest it into `wiki/` with source-backed claim ledger rows.
 
+If an existing answer's `## Gaps` or evaluation output already identifies missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps`. This produces `.cwiki/web-gaps/web-gap-*.md` plus the web query, web research workspace, and fusion prompt needed for the next browser-backed pass.
+
 ## Lint Workflow
 
 Run `cwiki lint .` and inspect:

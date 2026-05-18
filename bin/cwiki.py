@@ -410,6 +410,7 @@ def init_wiki(target: str, domain: str | None) -> None:
             ".cwiki/briefs/**\n"
             ".cwiki/answers/**\n"
             ".cwiki/web-research/**\n"
+            ".cwiki/web-gaps/**\n"
             ".cwiki/eval/**\n"
             ".cwiki/graph/**\n"
             ".cwiki/usage/**\n"
@@ -682,6 +683,11 @@ def eval_answer(
     max_output_tokens: int = 1000,
     agent_eval_file: str | None = None,
     agent_model: str | None = None,
+    web_on_gaps: bool = False,
+    web_gap_top_k: int = DEFAULT_TOP_K,
+    web_gap_max_sources: int | None = None,
+    web_gap_wiki_weight: float | None = None,
+    web_gap_web_weight: float | None = None,
 ) -> None:
     root = Path(target).resolve()
     assert_wiki(root)
@@ -689,6 +695,16 @@ def eval_answer(
     pages = collect_pages(root)
     result = build_answer_eval(root, answer_file, pages)
     attach_llm_eval(root, result, llm, provider, model, api_key_env, base_url, max_output_tokens, agent_eval_file, agent_model)
+    if web_on_gaps:
+        result["web_followup"] = create_web_followup_for_answer_gaps(
+            root,
+            answer_file,
+            result,
+            web_gap_top_k,
+            web_gap_max_sources,
+            web_gap_wiki_weight,
+            web_gap_web_weight,
+        )
     report = render_eval_json(result) if json_output else render_answer_eval_report(root, result)
     print(report)
 
@@ -2374,6 +2390,7 @@ def render_answer_eval_report(root: Path, result: dict[str, object]) -> str:
     next_steps = render_answer_eval_next_steps(warnings, language)
     llm_frontmatter = render_llm_frontmatter(result)
     llm_section = render_llm_assisted_section(result, language)
+    web_followup_section = render_web_followup_section(result, language)
     deterministic_note = render_deterministic_note(result, language)
     graph_details = render_graph_expanded_eval_details(retrieval, language)
     path_details = render_path_evidence_eval_details(retrieval, language)
@@ -2470,6 +2487,7 @@ Grounding：{scores['grounding']}/100
 {path_details}
 
 {llm_section}
+{web_followup_section}
 
 ## 说明
 
@@ -2569,6 +2587,7 @@ Risk: {result['risk']}
 {path_details}
 
 {llm_section}
+{web_followup_section}
 
 ## Notes
 
@@ -2837,6 +2856,76 @@ def render_llm_assisted_section(result: dict[str, object], language: str) -> str
 {usage_lines}
 
 {response}
+"""
+
+
+def render_web_followup_section(result: dict[str, object], language: str) -> str:
+    followup = result.get("web_followup")
+    if not isinstance(followup, dict):
+        return ""
+    heading = "## Web Gap Follow-up" if language != "zh-CN" else "## 联网补证任务"
+    status = followup.get("status", "-")
+    reason = followup.get("reason", "-")
+    categories = followup.get("categories") if isinstance(followup.get("categories"), list) else []
+    excerpts = followup.get("matched_excerpts") if isinstance(followup.get("matched_excerpts"), list) else []
+    category_lines = "\n".join(f"- {item.get('reason')}" for item in categories if isinstance(item, dict)) or "- None"
+    excerpt_lines = "\n".join(f"- {item}" for item in excerpts if item) or "- None"
+    if language == "zh-CN":
+        artifact_lines = (
+            f"- Web query prompt：`{followup.get('web_query_prompt', '-')}`\n"
+            f"- Web research workspace：`{followup.get('web_research_file', '-')}`\n"
+            f"- Evidence fusion prompt：`{followup.get('fusion_prompt', '-')}`\n"
+            f"- Follow-up report：`{followup.get('followup_report', '-')}`"
+            if followup.get("triggered")
+            else "- 未生成联网补证产物。"
+        )
+        return f"""
+{heading}
+
+- 状态：`{status}`
+- 原因：{reason}
+- 证据权重：wiki `{followup.get('wiki_weight', '-')}`，web `{followup.get('web_weight', '-')}`，web mode `{followup.get('web_mode', '-')}`
+- 最大 web 来源数：{followup.get('max_web_sources', '-')}
+
+### 触发类别
+
+{category_lines}
+
+### 命中的缺口片段
+
+{excerpt_lines}
+
+### 产物
+
+{artifact_lines}
+"""
+    artifact_lines = (
+        f"- Web query prompt: `{followup.get('web_query_prompt', '-')}`\n"
+        f"- Web research workspace: `{followup.get('web_research_file', '-')}`\n"
+        f"- Evidence fusion prompt: `{followup.get('fusion_prompt', '-')}`\n"
+        f"- Follow-up report: `{followup.get('followup_report', '-')}`"
+        if followup.get("triggered")
+        else "- No web follow-up artifacts were created."
+    )
+    return f"""
+{heading}
+
+- Status: `{status}`
+- Reason: {reason}
+- Evidence weights: wiki `{followup.get('wiki_weight', '-')}`, web `{followup.get('web_weight', '-')}`, web mode `{followup.get('web_mode', '-')}`
+- Max web sources: {followup.get('max_web_sources', '-')}
+
+### Trigger Categories
+
+{category_lines}
+
+### Matched Gap Excerpts
+
+{excerpt_lines}
+
+### Artifacts
+
+{artifact_lines}
 """
 
 
@@ -4917,6 +5006,13 @@ def ask_wiki(
         print(prompt)
 
 
+def render_research_focus_section(research_focus: str, language: str = "en") -> str:
+    if not research_focus:
+        return ""
+    heading = "研究重点" if language == "zh-CN" else "Research Focus"
+    return f"## {heading}\n\n{research_focus}\n"
+
+
 def create_web_query_prompt(
     target: str,
     question: str,
@@ -4925,6 +5021,7 @@ def create_web_query_prompt(
     wiki_weight: float = DEFAULT_WIKI_WEIGHT,
     web_weight: float = DEFAULT_WEB_WEIGHT,
     web_enabled: bool = True,
+    research_focus: str = "",
 ) -> tuple[Path, Path, Path, Path, list[tuple[Page, int]], str, str]:
     root = Path(target).resolve()
     assert_wiki(root)
@@ -4963,6 +5060,7 @@ def create_web_query_prompt(
         context_sections = "No directly matching wiki pages were found. Use `wiki/index.md` to understand the local wiki before browsing."
         relevant_pages = "- No direct matches"
 
+    focus_section = render_research_focus_section(research_focus)
     prompt = f"""---
 title: Web Query Prompt - {question}
 tags: [query, web, prompt]
@@ -4980,6 +5078,7 @@ web_mode: {web_mode}
 
 {question}
 
+{focus_section}
 ## Local Wiki Context
 
 {relevant_pages}
@@ -5019,11 +5118,11 @@ If web mode is `disabled`, do not search the web. Use local wiki evidence only a
 {context_sections}
 """
     prompt_file.write_text(prompt, encoding="utf-8")
-    research = render_web_research_template(question, hits, wiki_weight, web_weight, web_mode, effective_web_sources)
+    research = render_web_research_template(question, hits, wiki_weight, web_weight, web_mode, effective_web_sources, research_focus)
     research_file.write_text(research, encoding="utf-8")
-    fusion_prompt = render_fusion_prompt(question, hits, research_file, wiki_weight, web_weight, web_mode)
+    fusion_prompt = render_fusion_prompt(question, hits, research_file, wiki_weight, web_weight, web_mode, research_focus)
     fusion_prompt_file.write_text(fusion_prompt, encoding="utf-8")
-    brief = render_web_brief(question, hits, prompt_file, fusion_prompt_file, research_file, effective_web_sources, wiki_weight, web_weight, web_mode)
+    brief = render_web_brief(question, hits, prompt_file, fusion_prompt_file, research_file, effective_web_sources, wiki_weight, web_weight, web_mode, research_focus)
     brief_file.write_text(brief, encoding="utf-8")
     return prompt_file, brief_file, research_file, fusion_prompt_file, hits, prompt, brief
 
@@ -5052,11 +5151,13 @@ def render_web_research_template(
     web_weight: float,
     web_mode: str,
     max_web_sources: int,
+    research_focus: str = "",
 ) -> str:
     date = today()
     relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}` — {page.summary}" for page, score in hits)
     if not relevant_pages:
         relevant_pages = "- No direct local matches"
+    focus_section = render_research_focus_section(research_focus)
     return f"""---
 title: Web Research - {question}
 tags: [query, web-research]
@@ -5076,6 +5177,7 @@ This is the browser research workspace. Fill it before producing the final answe
 
 {question}
 
+{focus_section}
 ## Evidence Weights
 
 - Local wiki weight: {wiki_weight}
@@ -5129,11 +5231,13 @@ def render_fusion_prompt(
     wiki_weight: float,
     web_weight: float,
     web_mode: str,
+    research_focus: str = "",
 ) -> str:
     date = today()
     relevant_pages = "\n".join(f"- [[{page.slug}]] ({score}) `{page.rel}`" for page, score in hits)
     if not relevant_pages:
         relevant_pages = "- No direct local matches"
+    focus_section = render_research_focus_section(research_focus)
     return f"""---
 title: Evidence Fusion Prompt - {question}
 tags: [query, fusion, prompt]
@@ -5151,6 +5255,7 @@ web_mode: {web_mode}
 
 {question}
 
+{focus_section}
 ## Evidence Inputs
 
 ### Local Wiki Pages
@@ -5192,6 +5297,7 @@ def render_web_brief(
     wiki_weight: float,
     web_weight: float,
     web_mode: str,
+    research_focus: str = "",
 ) -> str:
     date = today()
     chinese = contains_chinese(question) or any(contains_chinese(page.text) for page, _ in hits)
@@ -5200,6 +5306,7 @@ def render_web_brief(
         relevant_pages = "- No direct local matches"
 
     if chinese:
+        focus_section = render_research_focus_section(research_focus, "zh-CN")
         return f"""---
 title: Web Brief - {question}
 tags: [query, web, brief]
@@ -5216,6 +5323,7 @@ status: draft
 
 {question}
 
+{focus_section}
 ## 本地相关页面
 
 {relevant_pages}
@@ -5237,6 +5345,7 @@ status: draft
 - Evidence fusion prompt: `{fusion_prompt_file.name}`
 """
 
+    focus_section = render_research_focus_section(research_focus)
     return f"""---
 title: Web Brief - {question}
 tags: [query, web, brief]
@@ -5253,6 +5362,7 @@ This is a web research task brief, not a final answer. It combines local wiki co
 
 {question}
 
+{focus_section}
 ## Relevant Local Pages
 
 {relevant_pages}
@@ -5325,6 +5435,258 @@ def web_ask_wiki(
         print(prompt)
 
 
+WEB_GAP_PATTERNS: list[tuple[str, str, str, str]] = [
+    (
+        "case_studies",
+        r"case stud|real[- ]world|industry|enterprise|customer|production|案例|落地|行业|真实|实践|客户|企业",
+        "缺少真实案例、行业对比或落地证据",
+        "Missing case studies, industry comparisons, or real-world evidence",
+    ),
+    (
+        "metrics",
+        r"metric|benchmark|latency|cost|roi|throughput|accuracy|performance|quant|量化|指标|成本|延迟|吞吐|准确率|性能|ROI|开销",
+        "缺少量化指标、成本、性能或 ROI 对比",
+        "Missing quantitative metrics, cost, performance, or ROI comparisons",
+    ),
+    (
+        "migration",
+        r"migration|transition|implementation|roadmap|playbook|guide|迁移|过渡|实施|指南|路径|步骤|落地方案",
+        "缺少迁移路径、实施指南或落地步骤",
+        "Missing migration path, implementation guide, or rollout steps",
+    ),
+    (
+        "current_external",
+        r"latest|recent|current|today|web|online|external|market|policy|regulation|最新|近期|当前|今天|联网|网络|外部|市场|政策|监管",
+        "缺少最新、外部或联网证据",
+        "Missing current, external, or web evidence",
+    ),
+]
+
+
+def create_web_followup_for_answer_gaps(
+    root: Path,
+    answer_file: Path,
+    eval_result: dict[str, object],
+    top_k: int,
+    max_web_sources: int | None,
+    wiki_weight: float | None,
+    web_weight: float | None,
+) -> dict[str, object]:
+    load_local_env(root)
+    answer_text = answer_file.read_text(encoding="utf-8")
+    signal = detect_web_gap_signal(answer_text, eval_result)
+    resolved_wiki_weight = wiki_weight if wiki_weight is not None else env_float("CWIKI_WEB_WIKI_WEIGHT", DEFAULT_WIKI_WEIGHT)
+    resolved_web_weight = web_weight if web_weight is not None else env_float("CWIKI_WEB_WEIGHT", DEFAULT_WEB_WEIGHT)
+    resolved_max_sources = max_web_sources if max_web_sources is not None else env_int("CWIKI_WEB_MAX_SOURCES", 6)
+    env_web_enabled = env_bool("CWIKI_WEB_ENABLED", True)
+    web_enabled = env_web_enabled and resolved_web_weight > 0 and resolved_max_sources > 0
+    result: dict[str, object] = {
+        "enabled": True,
+        "triggered": bool(signal["triggered"]),
+        "status": "created" if signal["triggered"] else "not_triggered",
+        "reason": signal["summary"],
+        "categories": signal["categories"],
+        "matched_excerpts": signal["matched_excerpts"],
+        "wiki_weight": resolved_wiki_weight,
+        "web_weight": resolved_web_weight,
+        "web_mode": "enabled" if web_enabled else "disabled",
+        "max_web_sources": resolved_max_sources,
+        "answer_file": display_path(answer_file, root),
+    }
+    if not signal["triggered"]:
+        return result
+
+    question = str(eval_result.get("question") or extract_question_from_answer(answer_text, parse_frontmatter(answer_text)) or answer_file.stem)
+    focus = render_web_gap_focus(question, signal, answer_file, root)
+    prompt_file, brief_file, research_file, fusion_prompt_file, _hits, _prompt, _brief = create_web_query_prompt(
+        root.as_posix(),
+        question,
+        top_k,
+        resolved_max_sources,
+        resolved_wiki_weight,
+        resolved_web_weight,
+        web_enabled,
+        focus,
+    )
+    report_file = write_web_gap_followup_report(
+        root,
+        question,
+        answer_file,
+        signal,
+        prompt_file,
+        brief_file,
+        research_file,
+        fusion_prompt_file,
+        resolved_wiki_weight,
+        resolved_web_weight,
+        resolved_max_sources,
+    )
+    result.update(
+        {
+            "web_query_prompt": display_path(prompt_file, root),
+            "web_brief": display_path(brief_file, root),
+            "web_research_file": display_path(research_file, root),
+            "fusion_prompt": display_path(fusion_prompt_file, root),
+            "followup_report": display_path(report_file, root),
+        }
+    )
+    return result
+
+
+def detect_web_gap_signal(answer_text: str, eval_result: dict[str, object] | None = None) -> dict[str, object]:
+    eval_result = eval_result or {}
+    language = str(eval_result.get("language", "en"))
+    body = markdown_body(answer_text)
+    answer_body = extract_answer_body(body)
+    gap_text = "\n".join(
+        section
+        for section in (
+            extract_markdown_section(answer_body, "Gaps"),
+            extract_markdown_section(answer_body, "缺口"),
+            extract_markdown_section(answer_body, "Limitations"),
+            extract_markdown_section(answer_body, "限制"),
+            extract_markdown_section(answer_body, "Open Questions"),
+            extract_markdown_section(answer_body, "开放问题"),
+        )
+        if section
+    )
+    llm = eval_result.get("llm_assisted")
+    llm_response = str(llm.get("response", "")) if isinstance(llm, dict) else ""
+    warning_text = "\n".join(str(item.get("message", "")) for item in eval_result.get("warnings", []) if isinstance(item, dict))
+    search_text = "\n\n".join(part for part in (gap_text, llm_response, warning_text) if part).strip()
+
+    categories: list[dict[str, str]] = []
+    excerpts: list[str] = []
+    for key, pattern, zh_reason, en_reason in WEB_GAP_PATTERNS:
+        if re.search(pattern, search_text, flags=re.IGNORECASE):
+            categories.append({"key": key, "reason": zh_reason if language == "zh-CN" or contains_chinese(search_text) else en_reason})
+            excerpts.extend(matching_gap_lines(search_text, pattern))
+    seen: set[str] = set()
+    unique_excerpts: list[str] = []
+    for item in excerpts:
+        if item not in seen:
+            unique_excerpts.append(item)
+            seen.add(item)
+    summary = "；".join(item["reason"] for item in categories) if categories else "未发现需要联网补证的 gap"
+    return {
+        "triggered": bool(categories),
+        "summary": summary,
+        "categories": categories,
+        "matched_excerpts": unique_excerpts[:8],
+    }
+
+
+def matching_gap_lines(text: str, pattern: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or not re.search(pattern, line, flags=re.IGNORECASE):
+            continue
+        lines.append(line[:240])
+    if lines:
+        return lines
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return []
+    start = max(0, match.start() - 80)
+    end = min(len(text), match.end() + 160)
+    return [re.sub(r"\s+", " ", text[start:end]).strip()]
+
+
+def render_web_gap_focus(question: str, signal: dict[str, object], answer_file: Path, root: Path) -> str:
+    reasons = signal.get("categories") if isinstance(signal.get("categories"), list) else []
+    reason_lines = "\n".join(f"- {item.get('reason')}" for item in reasons if isinstance(item, dict)) or "- 补齐答案中的外部证据缺口。"
+    excerpts = signal.get("matched_excerpts") if isinstance(signal.get("matched_excerpts"), list) else []
+    excerpt_lines = "\n".join(f"- {item}" for item in excerpts) or "- No matched gap excerpt recorded."
+    return f"""This web follow-up was triggered by answer/evaluation gaps.
+
+Original question: {question}
+Answer file: `{display_path(answer_file, root)}`
+
+Research goals:
+{reason_lines}
+
+Matched gap excerpts:
+{excerpt_lines}
+
+Browser research should prioritize primary or durable sources, collect concrete evidence for these gaps, and then use the fusion prompt to produce an updated answer that separates local wiki evidence from web evidence."""
+
+
+def write_web_gap_followup_report(
+    root: Path,
+    question: str,
+    answer_file: Path,
+    signal: dict[str, object],
+    prompt_file: Path,
+    brief_file: Path,
+    research_file: Path,
+    fusion_prompt_file: Path,
+    wiki_weight: float,
+    web_weight: float,
+    max_web_sources: int,
+) -> Path:
+    ensure_dir(root / ".cwiki" / "web-gaps")
+    path = root / ".cwiki" / "web-gaps" / f"web-gap-{timestamp()}-{slugify(question)}.md"
+    categories = signal.get("categories") if isinstance(signal.get("categories"), list) else []
+    category_lines = "\n".join(f"- {item.get('reason')}" for item in categories if isinstance(item, dict)) or "- None"
+    excerpts = signal.get("matched_excerpts") if isinstance(signal.get("matched_excerpts"), list) else []
+    excerpt_lines = "\n".join(f"- {item}" for item in excerpts) or "- None"
+    path.write_text(
+        f"""---
+title: Web Gap Follow-up - {question}
+tags: [web-gap, follow-up]
+updated: {today()}
+status: pending
+wiki_weight: {wiki_weight}
+web_weight: {web_weight}
+max_web_sources: {max_web_sources}
+---
+
+# Web Gap Follow-up - {question}
+
+## Why This Was Created
+
+The answer or its evaluation contained gaps that require current or external evidence.
+
+## Trigger Categories
+
+{category_lines}
+
+## Matched Gap Excerpts
+
+{excerpt_lines}
+
+## Artifacts
+
+- Answer file: `{display_path(answer_file, root)}`
+- Web query prompt: `{display_path(prompt_file, root)}`
+- Web brief: `{display_path(brief_file, root)}`
+- Web research workspace: `{display_path(research_file, root)}`
+- Evidence fusion prompt: `{display_path(fusion_prompt_file, root)}`
+
+## Next Step
+
+Give the web query prompt to a browser-capable agent using `wiki-agent-browser`. After it fills the web research workspace, use the fusion prompt to produce the updated final answer.
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def render_web_followup_cli_summary(root: Path, followup: dict[str, object]) -> str:
+    if not followup.get("triggered"):
+        return "\nWeb gap follow-up: not triggered."
+    return (
+        "\nWeb gap follow-up: created\n"
+        f"- Reason: {followup.get('reason')}\n"
+        f"- Web mode: {followup.get('web_mode', '-')}\n"
+        f"- Web query prompt: {followup.get('web_query_prompt')}\n"
+        f"- Web research workspace: {followup.get('web_research_file')}\n"
+        f"- Evidence fusion prompt: {followup.get('fusion_prompt')}\n"
+        f"- Follow-up report: {followup.get('followup_report')}"
+    )
+
+
 def answer_wiki(
     target: str,
     question: str,
@@ -5337,6 +5699,11 @@ def answer_wiki(
     base_url: str | None,
     max_output_tokens: int,
     graph_rerank_output_tokens: int,
+    web_on_gaps: bool = False,
+    web_gap_top_k: int = DEFAULT_TOP_K,
+    web_gap_max_sources: int | None = None,
+    web_gap_wiki_weight: float | None = None,
+    web_gap_web_weight: float | None = None,
 ) -> int:
     root = Path(target).resolve()
     load_local_env(root)
@@ -5408,6 +5775,19 @@ def answer_wiki(
     print(f"\nSaved answer: {answer_file.relative_to(root).as_posix()}")
     print(f"Query prompt: {prompt_file.relative_to(root).as_posix()}")
     print(llm_usage_line(llm_response.usage, llm_response.cost))
+    if web_on_gaps:
+        pages = collect_pages(root)
+        eval_result = build_answer_eval(root, answer_file, pages)
+        web_followup = create_web_followup_for_answer_gaps(
+            root,
+            answer_file,
+            eval_result,
+            web_gap_top_k,
+            web_gap_max_sources,
+            web_gap_wiki_weight,
+            web_gap_web_weight,
+        )
+        print(render_web_followup_cli_summary(root, web_followup))
     if health_warnings:
         print("\nAnswer may be truncated; please retry.", file=sys.stderr)
         for item in health_warnings:
@@ -6032,6 +6412,11 @@ def build_parser() -> argparse.ArgumentParser:
     eval_answer_parser.add_argument("--max-output-tokens", type=int, default=1000)
     eval_answer_parser.add_argument("--agent-eval-file", default=None, help="Attach a Markdown LLM-assisted evaluation written by the current agent platform")
     eval_answer_parser.add_argument("--agent-model", default=None, help="Model label to record for --agent-eval-file")
+    eval_answer_parser.add_argument("--web-on-gaps", action="store_true", help="Create web-ask/fusion artifacts when answer gaps need external evidence")
+    eval_answer_parser.add_argument("--web-gap-top-k", type=int, default=DEFAULT_TOP_K, help="Local wiki pages to include in web gap follow-up prompts")
+    eval_answer_parser.add_argument("--web-gap-max-sources", type=int, default=None, help="Override max web sources for web gap follow-up")
+    eval_answer_parser.add_argument("--web-gap-wiki-weight", type=float, default=None, help="Override local wiki evidence weight for web gap follow-up")
+    eval_answer_parser.add_argument("--web-gap-web-weight", type=float, default=None, help="Override web evidence weight for web gap follow-up")
 
     eval_all_parser = subparsers.add_parser("eval-all", help="Evaluate wiki quality and optional answer quality")
     eval_all_parser.add_argument("dir")
@@ -6147,6 +6532,11 @@ def build_parser() -> argparse.ArgumentParser:
     answer_parser.add_argument("--base-url", default=None)
     answer_parser.add_argument("--max-output-tokens", type=int, default=1200)
     answer_parser.add_argument("--graph-rerank-output-tokens", type=int, default=500)
+    answer_parser.add_argument("--web-on-gaps", action="store_true", help="After answering, create web-ask/fusion artifacts when gaps need external evidence")
+    answer_parser.add_argument("--web-gap-top-k", type=int, default=DEFAULT_TOP_K, help="Local wiki pages to include in web gap follow-up prompts")
+    answer_parser.add_argument("--web-gap-max-sources", type=int, default=None, help="Override max web sources for web gap follow-up")
+    answer_parser.add_argument("--web-gap-wiki-weight", type=float, default=None, help="Override local wiki evidence weight for web gap follow-up")
+    answer_parser.add_argument("--web-gap-web-weight", type=float, default=None, help="Override web evidence weight for web gap follow-up")
 
     capture_parser = subparsers.add_parser("capture", help="Capture a source and create an ingest prompt")
     capture_parser.add_argument("dir")
@@ -6173,7 +6563,26 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "eval":
             eval_wiki(args.dir, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
         elif args.command == "eval-answer":
-            eval_answer(args.dir, args.answer_file, args.output, args.no_write, args.json, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
+            eval_answer(
+                args.dir,
+                args.answer_file,
+                args.output,
+                args.no_write,
+                args.json,
+                args.llm,
+                args.provider,
+                args.model,
+                args.api_key_env,
+                args.base_url,
+                args.max_output_tokens,
+                args.agent_eval_file,
+                args.agent_model,
+                args.web_on_gaps,
+                args.web_gap_top_k,
+                args.web_gap_max_sources,
+                args.web_gap_wiki_weight,
+                args.web_gap_web_weight,
+            )
         elif args.command == "eval-all":
             eval_all(args.dir, args.answer, args.output, args.no_write, args.json, args.wiki_only, args.llm, args.provider, args.model, args.api_key_env, args.base_url, args.max_output_tokens, args.agent_eval_file, args.agent_model)
         elif args.command == "eval-schedule":
@@ -6268,6 +6677,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.base_url,
                 args.max_output_tokens,
                 args.graph_rerank_output_tokens,
+                args.web_on_gaps,
+                args.web_gap_top_k,
+                args.web_gap_max_sources,
+                args.web_gap_wiki_weight,
+                args.web_gap_web_weight,
             )
         elif args.command == "capture":
             capture_source(args.dir, args.source, args.title)

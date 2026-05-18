@@ -49,6 +49,8 @@
 6. 如果问题需要实时网络证据，运行 `cwiki web-ask . "<question>"` 并遵循 `wiki-agent-browser`。
 7. 最终文字由当前 agent 平台模型生成，而不是项目 `.env` 中配置的模型；除非用户明确要求运行 `cwiki answer`。
 
+当已有草稿答案后，如果 `## Gaps` 写明缺少案例、量化指标、最新事实或实施指南，运行 `cwiki eval-answer . <answer-file> --web-on-gaps`。它会生成 `.cwiki/web-gaps/`、web research 和 fusion prompt 产物，让下一轮真的去补外部证据，而不是只在报告里停留于“缺少证据”。
+
 ## 回答结构
 
 混合式回答应使用：

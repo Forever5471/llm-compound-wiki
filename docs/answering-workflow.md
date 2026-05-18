@@ -49,6 +49,8 @@ Use this path inside Codex, Trae, Claude Code, Cursor, OpenCode, or another file
 6. If the question needs current web evidence, run `cwiki web-ask . "<question>"` and follow `wiki-agent-browser`.
 7. Generate final prose with the current agent-platform model, not the project's `.env` model, unless the user explicitly asks for `cwiki answer`.
 
+After a draft answer exists, run `cwiki eval-answer . <answer-file> --web-on-gaps` when the `## Gaps` section says that case studies, metrics, current facts, or implementation guidance are missing. This creates `.cwiki/web-gaps/`, web research, and fusion prompt artifacts so the next pass can actually gather external evidence instead of merely naming the gap.
+
 ## Answer Shape
 
 Hybrid answers should use:

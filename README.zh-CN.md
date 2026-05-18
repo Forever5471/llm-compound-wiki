@@ -208,9 +208,9 @@ cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--web-on-gaps]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
-cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
+cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json] [--llm] [--web-on-gaps]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
@@ -242,6 +242,8 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 `web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
 
+当答案或评估报告里出现“缺少外部证据”的缺口时，可以给 `cwiki answer` 或 `cwiki eval-answer` 加 `--web-on-gaps`。CLI 会检查答案里的 `## Gaps`、确定性 warning、以及可选的 LLM-assisted evaluation 文本，识别“缺少真实案例、量化指标、最新证据、迁移/实施指南”等信号；一旦触发，会生成同样的浏览器研究产物，并额外写入 `.cwiki/web-gaps/web-gap-*.md`。该流程会读取 `CWIKI_WEB_*` 默认值；也可以用 `--web-gap-max-sources`、`--web-gap-wiki-weight`、`--web-gap-web-weight` 临时覆盖。
+
 当前实现里，CLI 本身不会直接联网浏览。复制到 `.claude/skills/` 和 `.agents/skills/` 的技能是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
 
 未来可以增加一个纯终端的 `web-answer` 流程，把 wiki 检索、实时 web search、配置的证据权重和 `.env` 里的模型 provider 串成一个命令；但当前还没有实现。
@@ -251,6 +253,8 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
 `eval`、`eval-answer` 和 `eval-all` 会把质量报告写入 `.cwiki/eval/`。报告始终包含确定性本地检查和更细的质量信号。`eval-all` 默认扫描 `.cwiki/answers/` 并使用最新的 `answer-*.md` 生成综合报告；用 `--answer` 可以指定某个答案，用 `--wiki-only` 可以只评估 wiki。加 `--json` 时会输出适合 CI 或 agent 消费的结构化结果。
+
+当希望评估流程不要只停在“缺少 web evidence”这一句时，运行 `cwiki eval-answer . <answer-file> --web-on-gaps`。报告会新增“联网补证任务”区块，并指向生成的 web query、web research workspace、fusion prompt 和 follow-up report。
 
 当希望 CLI 自己调用 `.env` 里配置的模型时，可以加 `--llm` 附加 LLM-assisted evaluation。报告会写清楚本次辅助评估使用的 provider、model、状态和时间；如果没有配置 API key，确定性评估仍会完成，LLM 部分标记为 `skipped`。
 

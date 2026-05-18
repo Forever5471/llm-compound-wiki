@@ -222,9 +222,9 @@ cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
 cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--web-on-gaps]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
-cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
+cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json] [--llm] [--web-on-gaps]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
@@ -256,6 +256,8 @@ With `--graph-rerank`, the CLI sends final context candidate titles, summaries, 
 
 `web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
+When an answer or evaluation says that the current response lacks external evidence, add `--web-on-gaps` to `cwiki answer` or `cwiki eval-answer`. The CLI scans the answer `## Gaps`, deterministic warnings, and optional LLM-assisted evaluation text for signals such as missing case studies, quantitative metrics, current evidence, or migration guidance. If triggered, it creates the same browser workflow artifacts plus `.cwiki/web-gaps/web-gap-*.md`. The follow-up respects `CWIKI_WEB_*` defaults; override them with `--web-gap-max-sources`, `--web-gap-wiki-weight`, and `--web-gap-web-weight`.
+
 The CLI does not browse the live web by itself in the current implementation. The skills copied into `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins. Give the generated `web-query-*.md` prompt to a browser-capable agent that can use `wiki-agent-browser`; that agent should search, open sources, write `.cwiki/web-research/*.md`, and then answer from the generated fusion prompt.
 
 A future terminal-only `web-answer` flow could combine wiki retrieval, live web search, configured evidence weights, and the `.env` model provider in one command, but that is not implemented yet.
@@ -265,6 +267,8 @@ A browser-capable agent using `wiki-agent-browser` should read the local wiki fi
 `answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 
 `eval`, `eval-answer`, and `eval-all` generate quality reports under `.cwiki/eval/`. They always include deterministic local checks and detailed quality signals. `eval` checks compiled wiki quality; `eval-answer` checks a specific answer for grounding, source use, context coverage, protocol structure, and risk signals; `eval-all` combines wiki quality with answer quality. By default, `eval-all` scans `.cwiki/answers/` and uses the latest `answer-*.md`; use `--answer` to pin a specific answer, or `--wiki-only` to evaluate only the wiki. Add `--json` when CI or an agent needs machine-readable output.
+
+Use `cwiki eval-answer . <answer-file> --web-on-gaps` when a quality report should not stop at “missing web evidence”. The report will include a Web Gap Follow-up section and point to the generated web query, web research workspace, fusion prompt, and follow-up report.
 
 Add `--llm` when the CLI itself should call the `.env` configured model for an LLM-assisted evaluation section. The report records the provider, model, status, and timestamp used for that assessment. If no API key is configured, deterministic evaluation still completes and the LLM section is marked `skipped`.
 

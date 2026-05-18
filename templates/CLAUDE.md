@@ -75,6 +75,7 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - `cwiki answer` uses the configured provider/model and local wiki retrieval, but it does not perform live web search.
 - `web-ask` reads `.env` defaults such as `CWIKI_WEB_WIKI_WEIGHT`, `CWIKI_WEB_WEIGHT`, `CWIKI_WEB_MAX_SOURCES`, and `CWIKI_WEB_ENABLED`; command-line flags override them.
 - `web-ask` creates browser research and fusion prompts; it does not execute browser research by itself.
+- `answer --web-on-gaps` and `eval-answer --web-on-gaps` detect gaps that need external evidence, then create `.cwiki/web-gaps/`, `web-query-*`, `web-research-*`, and `fusion-*` artifacts. They use the same `CWIKI_WEB_*` defaults unless `--web-gap-*` flags override them.
 - The skill files in `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins.
 - When working as an agent inside this wiki, use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
 - The CLI automatically records model usage for `answer`, graph rerank, and `--llm` evaluation under `.cwiki/usage/llm-usage.jsonl`.
@@ -185,6 +186,8 @@ Action:
 8. Answer with separate local wiki evidence, web evidence, synthesis, gaps, and sources.
 9. Cite local pages as `[[slug]]`; cite external facts with exact URLs and access dates.
 10. If the web source should become durable knowledge, run `cwiki capture . <url> --title "<title>"`, process the ingest prompt, update `wiki/index.md`, and append to `wiki/log.md`.
+
+If a prior answer or evaluation already exists and its gaps say that case studies, metrics, current facts, or migration guidance are missing, run `cwiki eval-answer . <answer-file> --web-on-gaps` first. Use the generated web gap report and fusion prompt as the handoff for browser research.
 
 ### Update
 

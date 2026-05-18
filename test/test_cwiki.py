@@ -55,6 +55,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
+            self.assertIn(".cwiki/web-gaps/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
             self.assertIn(".cwiki/graph/**", gitignore)
             self.assertIn(".cwiki/usage/**", gitignore)
@@ -1665,6 +1666,108 @@ No known gaps from the inspected wiki context.
             self.assertIn("Model: `codex-current`", result.stdout)
             self.assertIn("Source file: `.cwiki/eval/agent-assisted-eval.md`", result.stdout)
             self.assertIn("当前 agent 模型认为答案证据充足", result.stdout)
+
+    def test_eval_answer_web_on_gaps_creates_followup_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Web gap eval test")
+            (root / "wiki" / "concepts" / "llm-wiki.md").write_text(
+                """---
+title: LLM Wiki
+kind: concept
+tags: [llm-wiki, rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# LLM Wiki
+
+LLM Wiki 把来源编译成可持续维护的 markdown 知识层，并通过 [[rag]] 对比传统检索增强。
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| LLM Wiki 强调由 LLM 写入和维护 wiki 层。 | raw/captures/llm-wiki.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "rag.md").write_text(
+                """---
+title: RAG
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# RAG
+
+RAG 在回答时检索上下文，常用于知识问答。
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-gap.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                """---
+title: Answer - LLM Wiki vs RAG
+tags: [answer]
+sources: 1
+updated: 2026-05-10
+status: draft
+question: 当处理什么业务场景时，选择 llm wiki 而不是 RAG？
+---
+
+# Answer - LLM Wiki vs RAG
+
+## Question
+
+当处理什么业务场景时，选择 llm wiki 而不是 RAG？
+
+## Answer
+
+当业务需要长期沉淀综合结论、持续维护页面和交叉引用时，可以考虑 [[llm-wiki]]，其本地依据来自 `raw/captures/llm-wiki.md`。
+
+## Gaps
+
+缺少真实企业案例、量化指标对比、成本 ROI，以及从 RAG 迁移到 LLM Wiki 的实施指南。
+
+## Relevant Pages
+
+- [[llm-wiki]] (10) `wiki/concepts/llm-wiki.md`
+- [[rag]] (4) `wiki/concepts/rag.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write", "--web-on-gaps")
+
+            self.assertIn("## 联网补证任务", result.stdout)
+            self.assertIn("状态：`created`", result.stdout)
+            self.assertIn("缺少量化指标", result.stdout)
+            self.assertIn("Evidence fusion prompt", result.stdout)
+            prompts = list((root / ".cwiki" / "prompts").glob("web-query-*.md"))
+            fusions = list((root / ".cwiki" / "prompts").glob("fusion-*.md"))
+            briefs = list((root / ".cwiki" / "briefs").glob("web-brief-*.md"))
+            research = list((root / ".cwiki" / "web-research").glob("web-research-*.md"))
+            gap_reports = list((root / ".cwiki" / "web-gaps").glob("web-gap-*.md"))
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(fusions), 1)
+            self.assertEqual(len(briefs), 1)
+            self.assertEqual(len(research), 1)
+            self.assertEqual(len(gap_reports), 1)
+            prompt_text = prompts[0].read_text(encoding="utf-8")
+            self.assertIn("## Research Focus", prompt_text)
+            self.assertIn("量化指标", prompt_text)
+            self.assertIn("迁移", prompt_text)
+            self.assertIn("Search the web for up to 6 high-quality sources", prompt_text)
+            self.assertIn("wiki-agent-browser", prompt_text)
+            self.assertIn("Evidence Fusion Prompt", fusions[0].read_text(encoding="utf-8"))
+            self.assertIn("web_mode: enabled", research[0].read_text(encoding="utf-8"))
+            self.assertIn("Web Gap Follow-up", gap_reports[0].read_text(encoding="utf-8"))
 
     def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
