@@ -7,7 +7,7 @@ This is an LLM Compound Wiki.
 - `raw/` contains immutable source material. Never edit or delete raw files unless the user explicitly asks.
 - `wiki/` contains the AI-maintained compiled knowledge layer: summaries, entities, concepts, comparisons, overview, and synthesis.
 - `.cwiki/prompts/` contains generated working prompts. It is not knowledge.
-- `.cwiki/graph/` contains generated graph artifacts such as `graph.json` and `graph.md`. It is a reusable navigation artifact, not canonical knowledge.
+- `.cwiki/graph/` contains generated link graph artifacts such as `graph.json` and `graph.md`. It is a reusable wikilink navigation artifact, not canonical knowledge or a typed knowledge graph.
 - `wiki/index.md` is the content catalog. Update it after every ingest or saved analysis.
 - `wiki/log.md` is append-only. Never rewrite history.
 
@@ -18,7 +18,7 @@ Before changing wiki content, read `WIKI_SCHEMA.md`.
 ## Execution Model
 
 - The CLI is the scaffold and local utility layer: initialize, capture, index, lint, search, and generate prompts or briefs.
-- `graph` and `graph-report` create a deterministic graph layer from compiled wiki pages and `[[wikilinks]]`.
+- `link-graph` and `link-graph-report` create a deterministic link graph from compiled wiki pages and `[[wikilinks]]`; `graph` and `graph-report` are compatibility aliases.
 - Agent intelligence runs in the current agent platform. Use the current agent model for reasoning and final prose unless the user explicitly asks you to run a CLI command.
 - Local skills are instructions for agents, not executable CLI plugins.
 - `ask` and `web-ask` prepare evidence and prompts; they do not call an LLM.
@@ -46,7 +46,7 @@ Use this when answering inside an agent platform such as Codex, Trae, Claude Cod
 - `synthesis`: include direct hits, graph context, path evidence, and global overview/synthesis/central pages. Best for comparisons, tradeoffs, strategy, evaluation, or broad summaries.
 - `auto`: let the CLI choose a layer from the question. If `auto` selects `path` but no path evidence exists, the CLI falls back to `graph` and records the fallback in Retrieval Trace.
 
-For graph retrieval, first run or refresh `cwiki graph-report .` when links have changed. Then use the query prompt's Retrieval Trace: direct hits are primary evidence, graph-expanded pages are nearby context, path evidence explains relationships, and final context pages define the reproducible evidence pack.
+For graph retrieval, first run or refresh `cwiki link-graph-report .` when links have changed. Then use the query prompt's Retrieval Trace: direct hits are primary evidence, graph-expanded pages are nearby context, path evidence explains relationships, and final context pages define the reproducible evidence pack. Treat this as link navigation, not a typed entity-relation graph.
 
 Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --graph-rerank` when semantic reranking is worth an extra model call. Inspect the `LLM Graph Rerank` section before answering, but keep source-backed page evidence above rerank reasons.
 
@@ -58,7 +58,7 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - Use `wiki-capture` before `wiki-ingest` when a source file or URL still needs to be recorded under `raw/captures/`.
 - For complex source formats, use the built-in parser skills: `wiki-parse-docx`, `wiki-parse-pdf`, `wiki-parse-image`, `wiki-parse-pptx`, and `wiki-parse-xlsx`.
 - For current web research that combines local wiki context with online evidence, use `wiki-agent-browser` and start with `cwiki web-ask . "<question>"`. Use `--web-weight 0` or `--no-web` when web search should be disabled.
-- If an answer or evaluation names external-evidence gaps such as missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps` or `cwiki answer . "<question>" --web-on-gaps` to create `.cwiki/web-gaps/`, web research, and fusion prompt artifacts.
+- If an answer or evaluation names external-evidence gaps such as missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps` or `cwiki answer . "<question>" --web-on-gaps` to create `.cwiki/web-gaps/`, web research, web capture checklist, and fusion prompt artifacts.
 
 ## Local Configuration
 
@@ -80,7 +80,7 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - For wiki questions in an agent platform, prefer the hybrid query workflow: use `cwiki ask . "<question>" --retrieval auto` for a stable prompt, evidence brief, and Retrieval Trace, then let the agent inspect additional wiki pages only when the prompt is incomplete.
 - If the local skills do not cover the task, use your platform's own tools or an exploratory implementation, while preserving the wiki schema, source-citation rules, and operation log.
 - If the user asks for web evidence, run `cwiki web-ask . "<question>"` when useful, read the generated prompts, perform browser research when enabled, and follow the configured weights during synthesis.
-- If the user asks about relationships, impact, paths, central concepts, or graph structure, run `cwiki graph-report .`, `cwiki path . <a> <b>`, or `cwiki explain . <slug>` when useful.
+- If the user asks about relationships, impact, paths, central concepts, or graph structure, run `cwiki link-graph-report .`, `cwiki path . <a> <b>`, or `cwiki explain . <slug>` when useful.
 
 ## Operating Principles
 
@@ -94,6 +94,6 @@ Use `cwiki ask . "<question>" --graph-rerank` or `cwiki answer . "<question>" --
 - Refresh both `wiki/overview.md` and `wiki/synthesis.md` after every ingest or update. `overview.md` should track the current map and entry links; `synthesis.md` should track the current thesis state, contradictions, evidence inventory, or why no thesis is promoted yet.
 - Valuable query answers should be offered as updates to `wiki/synthesis.md`, `wiki/comparisons/`, or another fitting wiki page.
 - Web evidence is external until captured. Cite exact URLs and access dates, then use `cwiki capture` before ingesting important web sources into `wiki/`.
-- Browser research should be recorded under `.cwiki/web-research/`, then fused with local wiki evidence through the generated `.cwiki/prompts/fusion-*.md`.
-- Generated graph artifacts should be refreshed with `cwiki graph-report .` after substantial link or page changes.
+- Browser research should be recorded under `.cwiki/web-research/`; durable-source decisions should be tracked under `.cwiki/web-captures/`; then fuse local wiki evidence through the generated `.cwiki/prompts/fusion-*.md`.
+- Generated link graph artifacts should be refreshed with `cwiki link-graph-report .` after substantial link or page changes.
 - Use `cwiki lint .` periodically to find broken links, stale claims, and orphan pages.

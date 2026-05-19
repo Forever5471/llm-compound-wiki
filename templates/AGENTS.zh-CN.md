@@ -7,7 +7,7 @@
 - `raw/` 是人类拥有的不可变源材料。除非用户明确要求，不要编辑或删除。
 - `wiki/` 是 AI 维护的编译知识层：summaries、entities、concepts、comparisons、overview 和 synthesis。
 - `.cwiki/prompts/` 是生成的工作 prompt，不是知识库正文。
-- `.cwiki/graph/` 是从 `wiki/` 和 `[[wikilink]]` 生成的图谱导航层，不是事实来源本身。
+- `.cwiki/graph/` 是从 `wiki/` 和 `[[wikilink]]` 生成的 link graph 导航层，不是事实来源本身，也不是 typed knowledge graph。
 - `wiki/index.md` 是内容目录。每次摄入或保存分析后都要更新。
 - `wiki/log.md` 是追加日志。不要重写历史。
 
@@ -23,7 +23,7 @@
 ## 执行模型
 
 - CLI 是脚手架和本地工具层：初始化、capture、index、lint、search、生成 prompt/brief、评估。
-- `graph` 和 `graph-report` 从已编译 wiki 页面与 `[[wikilink]]` 生成确定性图谱层。
+- `link-graph` 和 `link-graph-report` 从已编译 wiki 页面与 `[[wikilink]]` 生成确定性 link graph；`graph` 和 `graph-report` 是兼容别名。
 - agent 智能运行在当前平台。除非用户明确要求运行 CLI 模型命令，否则最终推理和文字由当前 agent 模型完成。
 - 本地 skills 是给 agent 看的说明，不是可执行 CLI 插件。
 - `ask` 和 `web-ask` 只准备证据和 prompt，不调用大模型。
@@ -52,7 +52,7 @@
 - `synthesis`：direct、graph、path，加上 `overview.md`、`synthesis.md` 和中心节点。适合综合总结、对比、取舍、策略和评估。
 - `auto`：由 CLI 根据问题自动选择层级。如果 `auto` 选到 `path` 但没有路径证据，会回退到 `graph`，并在 Retrieval Trace 记录原因。
 
-图检索不是把图谱当事实来源，而是把图谱当导航层。读取 Retrieval Trace 时：
+图检索不是把图谱当事实来源，而是把 link graph 当导航层。当前 graph 不是 typed entity-relation graph。读取 Retrieval Trace 时：
 
 - Direct Hits 是主证据。
 - Graph-Expanded Pages 是邻近上下文。
@@ -68,7 +68,7 @@
 - `.env` 被 git 忽略，不应提交。
 - `.env` 只影响终端/CLI 工作流，例如 `cwiki answer`；不会改变当前 agent 平台正在使用的聊天模型。
 - `web-ask` 会读取 `.env` 中的 wiki/web 权重和来源数量默认值，但命令行参数优先。
-- 如果答案或评估指出缺少案例、量化指标、最新事实、迁移/实施指南等外部证据，运行 `cwiki eval-answer . <answer-file> --web-on-gaps` 或 `cwiki answer . "<question>" --web-on-gaps`，生成 `.cwiki/web-gaps/`、web research 和 fusion prompt 产物。
+- 如果答案或评估指出缺少案例、量化指标、最新事实、迁移/实施指南等外部证据，运行 `cwiki eval-answer . <answer-file> --web-on-gaps` 或 `cwiki answer . "<question>" --web-on-gaps`，生成 `.cwiki/web-gaps/`、web research、web capture checklist 和 fusion prompt 产物。
 - `--web-on-gaps` 使用同一组 `CWIKI_WEB_*` 默认值，也支持 `--web-gap-max-sources`、`--web-gap-wiki-weight`、`--web-gap-web-weight` 单次覆盖。
 - CLI 会把 `answer`、图重排和 `--llm` evaluation 的模型用量自动记录到 `.cwiki/usage/llm-usage.jsonl`。
 - 如果当前 agent 平台能显示 ingest、update、浏览器研究、最终回答或其它平台模型工作的 token/费用，用 `cwiki usage-log . --operation <step> --provider agent-platform --model <visible-model-name> ...` 手动补记。
@@ -86,6 +86,6 @@
 - `wiki/overview.md` 和 `wiki/synthesis.md` 是两个可选第一阅读面，不是占位页。
 - 每次 ingest 或 update 后都刷新 `overview.md` 与 `synthesis.md`。
 - 有价值的问答应建议沉淀到 `wiki/synthesis.md`、`wiki/comparisons/` 或其它合适页面。
-- web evidence 在 capture 前仍是外部证据；引用精确 URL 和访问日期，重要来源先 `cwiki capture` 再摄入。
-- 大幅更新页面或链接后，运行 `cwiki graph-report .` 刷新图谱。
+- web evidence 在 capture 前仍是外部证据；引用精确 URL 和访问日期，重要来源先 `cwiki capture` 再摄入，并同步维护 `.cwiki/web-captures/`。
+- 大幅更新页面或链接后，运行 `cwiki link-graph-report .` 刷新 link graph。
 - 周期性运行 `cwiki lint .` 检查断链、过期 claim 和孤立页面。

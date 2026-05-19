@@ -29,8 +29,17 @@ Ingest turns raw evidence into compiled wiki pages.
 9. Put factual claims in the page's claim ledger with a source path or URL.
 10. Add `[[wikilinks]]` in both directions when pages clearly relate.
 11. Run `cwiki index .`.
-12. Append to `wiki/log.md`.
-13. If the agent platform shows token or cost numbers for this ingest, record them with `cwiki usage-log . --operation ingest --provider agent-platform --model <visible-model-name> ...`.
+12. Run `cwiki link-graph-report .` after link changes.
+13. Append to `wiki/log.md`.
+14. If the agent platform shows token or cost numbers for this ingest, record them with `cwiki usage-log . --operation ingest --provider agent-platform --model <visible-model-name> ...`.
+
+For recoverable runs, create or update `.cwiki/ingest-runs/` state with:
+
+```bash
+cwiki ingest-plan . --source <raw-file>
+cwiki ingest-step . <run-id> apply --status completed --note "wiki pages updated"
+cwiki ingest-step . <run-id> validate --status completed
+```
 
 ## Required Output
 

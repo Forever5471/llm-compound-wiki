@@ -6,7 +6,7 @@ LLM Compound Wiki is an open-source scaffold for building a personal or team wik
 
 Build an agent-maintained Markdown wiki in any folder.
 
-No database. No embedding service. No vendor lock-in.
+Default path: no database, no embedding service, no vendor lock-in. Larger wikis can add an optional embedding/vector index later.
 
 Use Codex, Claude Code, Cursor, Trae, OpenCode, or any filesystem-capable agent.
 
@@ -44,7 +44,9 @@ flowchart TD
     wiki --> claims["claim ledgers + wikilinks + log"]
     web["web sources"] --> browser["browser-capable agent"]
     browser --> research[".cwiki/web-research/"]
+    browser --> captures[".cwiki/web-captures/ checklist"]
     research --> agent
+    captures --> capture
 ```
 
 ## Execution Model
@@ -65,7 +67,8 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 | Agent-agnostic workflow | Yes |
 | Obsidian-friendly Markdown | Yes |
 | Zero-dependency Python CLI | Yes |
-| Local search without embeddings | Yes |
+| Default local search without embeddings | Yes |
+| Optional embedding/vector index | Planned extension |
 | Claim ledger and operation log | Yes |
 | Generated agent skills | Yes |
 | Hosted service | No |
@@ -76,7 +79,7 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 ## What This Is Not
 
 - Not a hosted knowledge-base app.
-- Not a vector database or embedding service.
+- Not a hosted vector database or mandatory embedding service.
 - Not an autonomous crawler that silently rewrites your wiki.
 - Not tied to one model provider, editor, or agent platform.
 - Not a replacement for human judgment about which sources deserve to become durable knowledge.
@@ -215,8 +218,8 @@ Requirements:
 cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
-cwiki graph <dir>
-cwiki graph-report <dir>
+cwiki link-graph <dir>        # graph is kept as a compatibility alias
+cwiki link-graph-report <dir> # graph-report is kept as a compatibility alias
 cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
 cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
@@ -229,20 +232,26 @@ cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [-
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
 cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
+cwiki status <dir>
+cwiki ingest-plan <dir> [--source <raw-file>] [--prompt <prompt-file>] [--run-id <id>]
+cwiki ingest-status <dir> [run]
+cwiki ingest-step <dir> [run] <step> --status pending|in_progress|completed|blocked [--note "..."]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
 `capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
 
+`ingest-plan` creates a recoverable ingest run under `.cwiki/ingest-runs/`. Use `status` or `ingest-status` to see the latest run, and `ingest-step` to mark progress through `status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval`. This does not replace the agent-owned wiki writing step; it gives the workflow a deterministic state file so a run can resume after interruption.
+
 `ask` does not call an LLM by default. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer. Add `--graph-rerank` only when you want the configured model to semantically rerank graph/path/synthesis retrieval candidates before the prompt is written.
 
-The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings.
+The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings. For medium or large wikis, the intended extension path is an optional embedding/vector coarse-retrieval layer before the existing wiki and link-graph ranking.
 
 For agent-platform Q&A, use the hybrid query workflow. Start with `cwiki ask` so the question has a reproducible evidence prompt and brief. The agent should read those artifacts and the listed wiki pages first; if the prompt is incomplete, it may search the wiki again, inspect adjacent pages, and follow one level of useful `[[wikilinks]]`. Final prose should still follow the project answer protocol: `## Evidence Used`, `## Answer`, and `## Gaps`, with `[[slug]]` citations and source paths or URLs near factual claims. If current web evidence is needed, switch to `cwiki web-ask` and `wiki-agent-browser` rather than relying on model memory.
 
 See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answering workflow.
 
-`graph` and `graph-report` generate a lightweight graph layer from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/graph.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree.
+`link-graph` and `link-graph-report` generate the current link graph from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. The older `graph` and `graph-report` commands are compatibility aliases. This is a wikilink navigation graph, not a typed knowledge graph or semantic entity-relation graph. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/graph.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree.
 
 `ask --retrieval auto|direct|graph|path|synthesis` uses this layer to record a Retrieval Trace in query prompts:
 
@@ -254,15 +263,15 @@ See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answer
 
 With `--graph-rerank`, the CLI sends final context candidate titles, summaries, retrieval roles, and neighbor/path reasons to the configured model and asks for strict JSON ranking. The rerank status, selected reasons, and gaps are written into Retrieval Trace; `answer --graph-rerank` then sends the reranked Context Pack to the final answer model. GLM graph rerank sends `thinking: disabled` by default so output tokens go to strict JSON; set `CWIKI_GRAPH_RERANK_THINKING=enabled` if you want reasoning-enabled rerank.
 
-`web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes three artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
+`web-ask` is for questions that need local wiki context plus current web evidence. It first retrieves local wiki pages, then writes four artifacts: `.cwiki/prompts/web-query-*.md` for browser research, `.cwiki/web-research/web-research-*.md` for recording web findings, `.cwiki/web-captures/web-captures-*.md` for deciding which web sources must become durable `raw/captures/` records, and `.cwiki/prompts/fusion-*.md` for a later agent to synthesize local wiki evidence with web evidence into the final answer. Default weights are local wiki `0.6` and web search `0.4`; tune them with `--wiki-weight` and `--web-weight`. Use `--web-weight 0` or `--no-web` to disable browsing and produce a local-wiki-only fusion prompt.
 
 When an answer or evaluation says that the current response lacks external evidence, add `--web-on-gaps` to `cwiki answer` or `cwiki eval-answer`. The CLI scans the answer `## Gaps`, deterministic warnings, and optional LLM-assisted evaluation text for signals such as missing case studies, quantitative metrics, current evidence, or migration guidance. If triggered, it creates the same browser workflow artifacts plus `.cwiki/web-gaps/web-gap-*.md`. The follow-up respects `CWIKI_WEB_*` defaults; override them with `--web-gap-max-sources`, `--web-gap-wiki-weight`, and `--web-gap-web-weight`.
 
-The CLI does not browse the live web by itself in the current implementation. The skills copied into `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins. Give the generated `web-query-*.md` prompt to a browser-capable agent that can use `wiki-agent-browser`; that agent should search, open sources, write `.cwiki/web-research/*.md`, and then answer from the generated fusion prompt.
+The CLI does not browse the live web by itself in the current implementation. The skills copied into `.claude/skills/` and `.agents/skills/` are agent instructions, not executable CLI plugins. Give the generated `web-query-*.md` prompt to a browser-capable agent that can use `wiki-agent-browser`; that agent should search, open sources, write `.cwiki/web-research/*.md`, update `.cwiki/web-captures/*.md`, and then answer from the generated fusion prompt.
 
 A future terminal-only `web-answer` flow could combine wiki retrieval, live web search, configured evidence weights, and the `.env` model provider in one command, but that is not implemented yet.
 
-A browser-capable agent using `wiki-agent-browser` should read the local wiki first, search the web when enabled, open source pages before citing them, and record results under `.cwiki/web-research/`. Final answers should separate local evidence, web evidence, synthesis, and gaps. Every external factual claim needs an exact URL and access date. Durable web sources should be recorded with `cwiki capture . <url> --title "<title>"` before they are ingested into `wiki/`.
+A browser-capable agent using `wiki-agent-browser` should read the local wiki first, search the web when enabled, open source pages before citing them, and record results under `.cwiki/web-research/`. It should also update `.cwiki/web-captures/` so important web sources can be captured into `raw/captures/`. Final answers should separate local evidence, web evidence, synthesis, and gaps. Every external factual claim needs an exact URL and access date. Durable web sources should be recorded with `cwiki capture . <url> --title "<title>"` before they are ingested into `wiki/`.
 
 `answer` calls a model and writes the draft answer under `.cwiki/answers/`. It currently supports OpenAI's Responses API and GLM through an OpenAI-compatible Chat Completions endpoint. It still creates the same query prompt and human brief first, so answers remain auditable. Draft answers are not written into `wiki/` automatically; review them before asking an agent to preserve useful synthesis in the compiled wiki layer.
 

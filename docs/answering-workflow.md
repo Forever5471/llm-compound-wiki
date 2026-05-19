@@ -20,12 +20,12 @@ Add `--graph-rerank` when you want the configured model to rerank graph/path/syn
 ### Layered retrieval strategy
 
 - `direct`: direct keyword/vector hits only. Use for narrow fact lookup.
-- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated graph. Use when nearby concepts, roles, modules, or related entities may matter.
+- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated link graph. Use when nearby concepts, roles, modules, or related entities may matter.
 - `path`: graph context plus shortest-path evidence between top hits. Use for workflows, mechanisms, dependencies, relationships, and how/why questions.
 - `synthesis`: direct, graph, path, overview/synthesis, and central-node context. Use for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
 - `auto`: CLI-selected layer. If `auto` selects `path` but finds no path evidence, it falls back to `graph` and records the fallback in Retrieval Trace.
 
-Graph retrieval does not treat the graph as a fact source. `.cwiki/graph/graph.json` is a navigation layer: Direct Hits are primary evidence, Graph-Expanded Pages are nearby context, Path Evidence explains relationships, and Final Context Pages define the reproducible evidence pack.
+Graph retrieval does not treat the graph as a fact source. `.cwiki/graph/graph.json` is a wikilink navigation layer, not a typed knowledge graph: Direct Hits are primary evidence, Graph-Expanded Pages are nearby context, Path Evidence explains relationships, and Final Context Pages define the reproducible evidence pack.
 
 ### CLI model answering
 
@@ -49,7 +49,7 @@ Use this path inside Codex, Trae, Claude Code, Cursor, OpenCode, or another file
 6. If the question needs current web evidence, run `cwiki web-ask . "<question>"` and follow `wiki-agent-browser`.
 7. Generate final prose with the current agent-platform model, not the project's `.env` model, unless the user explicitly asks for `cwiki answer`.
 
-After a draft answer exists, run `cwiki eval-answer . <answer-file> --web-on-gaps` when the `## Gaps` section says that case studies, metrics, current facts, or implementation guidance are missing. This creates `.cwiki/web-gaps/`, web research, and fusion prompt artifacts so the next pass can actually gather external evidence instead of merely naming the gap.
+After a draft answer exists, run `cwiki eval-answer . <answer-file> --web-on-gaps` when the `## Gaps` section says that case studies, metrics, current facts, or implementation guidance are missing. This creates `.cwiki/web-gaps/`, web research, web capture checklist, and fusion prompt artifacts so the next pass can actually gather external evidence instead of merely naming the gap.
 
 ## Answer Shape
 

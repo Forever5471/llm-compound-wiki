@@ -24,7 +24,9 @@ wiki/
   index.md        Content catalog
   log.md          Append-only operation log
 .cwiki/prompts/   Generated ingest prompts and local working notes
-.cwiki/graph/     Generated graph artifacts from compiled wiki links
+.cwiki/graph/     Generated link graph artifacts from compiled wiki links
+.cwiki/web-captures/ Web source capture checklists from browser research
+.cwiki/ingest-runs/ Recoverable ingest workflow state
 .cwiki/usage/     LLM token usage ledger and cost audit artifacts
 ```
 
@@ -116,7 +118,10 @@ Keep both pages lightweight and useful. Do not duplicate `wiki/index.md`; link t
 7. Add links from new pages to existing pages and from existing pages back to new pages where appropriate.
 8. Before finishing, verify `wiki/overview.md` and `wiki/synthesis.md` no longer contain generic seed prose once real wiki knowledge exists.
 9. Run `cwiki index .`.
-10. Append to `wiki/log.md`.
+10. Run `cwiki link-graph-report .` after link changes.
+11. Append to `wiki/log.md`.
+
+For recoverable ingest runs, use `cwiki ingest-plan . --source <raw-file>` before the agent-owned writing step, then update progress with `cwiki ingest-step . <run> <step> --status ...`. The state machine is `status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval`.
 
 ## Query Workflow
 
@@ -137,7 +142,7 @@ For agent-platform use, query should be hybrid: the generated prompt provides a 
 ### Retrieval Layers
 
 - `direct`: direct keyword/vector hits only; use for narrow fact lookup.
-- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated graph; use for nearby concepts, roles, modules, and related entities.
+- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated link graph; use for nearby concepts, roles, modules, and related entities.
 - `path`: direct hits plus graph neighbors plus shortest-path evidence between top hits; use for workflows, mechanisms, dependencies, relationships, and how/why questions.
 - `synthesis`: direct hits plus graph context, path evidence, and overview/synthesis/central pages; use for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
 - `auto`: CLI-selected layer. If `auto` selects `path` but no path evidence exists, it falls back to `graph` and records the fallback in Retrieval Trace.
@@ -155,29 +160,30 @@ Add `--graph-rerank` only when semantic reranking is worth an extra model call. 
 
 Use this when a question is about relationships, paths, impact, central pages, or graph structure.
 
-1. Run `cwiki graph-report .` to generate `.cwiki/graph/graph.json` and `.cwiki/graph/graph.md`.
-2. Treat the graph as a derived navigation artifact. The canonical knowledge remains in `wiki/`.
+1. Run `cwiki link-graph-report .` to generate `.cwiki/graph/graph.json` and `.cwiki/graph/graph.md`.
+2. Treat the graph as a derived wikilink navigation artifact. The canonical knowledge remains in `wiki/`. It is not a typed knowledge graph or semantic entity-relation graph.
 3. Use `cwiki path . <from> <to>` for shortest wikilink paths.
 4. Use `cwiki explain . <slug>` for inbound links, outbound links, and claim sources.
-5. If the graph reveals missing links or broken links, update the relevant wiki pages with source-cited edits, then rerun `cwiki index .` and `cwiki graph-report .`.
+5. If the graph reveals missing links or broken links, update the relevant wiki pages with source-cited edits, then rerun `cwiki index .` and `cwiki link-graph-report .`.
 
 ## Agent Browser Workflow
 
 Use this when a question needs current web evidence in addition to the compiled wiki.
 
-1. Run `cwiki web-ask . "<question>"` to create a browser-agent prompt, web research workspace, and evidence fusion prompt.
+1. Run `cwiki web-ask . "<question>"` to create a browser-agent prompt, web research workspace, web capture checklist, and evidence fusion prompt.
 2. Read the generated `.cwiki/prompts/web-query-*.md`.
 3. Read local wiki context before browsing.
 4. Respect evidence weights in the prompt. Use `--web-weight 0` or `--no-web` to disable browsing.
 5. Search the web when enabled, open each cited source, and avoid citing search result snippets.
 6. Prefer primary sources and durable references over summaries or scraped pages.
 7. Write web findings into `.cwiki/web-research/*.md`.
-8. Read `.cwiki/prompts/fusion-*.md` to produce the final answer.
-9. Answer with separate local wiki evidence, web evidence, synthesis, gaps, and sources.
-10. Cite local pages as `[[topic]]`; cite web facts with exact URLs and access dates.
-11. If web evidence should become durable wiki knowledge, capture the URL with `cwiki capture`, then ingest it into `wiki/` with source-backed claim ledger rows.
+8. Update `.cwiki/web-captures/*.md` with capture decisions for sources that materially affect the answer.
+9. Read `.cwiki/prompts/fusion-*.md` to produce the final answer.
+10. Answer with separate local wiki evidence, web evidence, synthesis, gaps, and sources.
+11. Cite local pages as `[[topic]]`; cite web facts with exact URLs and access dates.
+12. If web evidence should become durable wiki knowledge, capture the URL with `cwiki capture`, then ingest it into `wiki/` with source-backed claim ledger rows.
 
-If an existing answer's `## Gaps` or evaluation output already identifies missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps`. This produces `.cwiki/web-gaps/web-gap-*.md` plus the web query, web research workspace, and fusion prompt needed for the next browser-backed pass.
+If an existing answer's `## Gaps` or evaluation output already identifies missing case studies, metrics, current facts, or migration guidance, run `cwiki eval-answer . <answer-file> --web-on-gaps`. This produces `.cwiki/web-gaps/web-gap-*.md` plus the web query, web research workspace, web capture checklist, and fusion prompt needed for the next browser-backed pass.
 
 ## Lint Workflow
 

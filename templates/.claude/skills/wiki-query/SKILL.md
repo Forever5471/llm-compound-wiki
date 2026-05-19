@@ -13,7 +13,7 @@ Do not answer from memory first. The compiled wiki is the working source of trut
 2. Treat the generated query prompt as the reproducible evidence boundary. It tells you which pages were retrieved, which output shape to use, and how to report gaps.
 3. Read Retrieval Trace before reading pages:
    - `direct` means direct hits are likely enough for narrow fact lookup.
-   - `graph` means direct hits plus graph-expanded neighbors should be checked for nearby concepts, roles, modules, or entities.
+   - `graph` means direct hits plus link-graph-expanded neighbors should be checked for nearby concepts, roles, modules, or entities. This is wikilink navigation, not typed knowledge-graph reasoning.
    - `path` means the answer should inspect shortest-path evidence for workflows, mechanisms, dependencies, or relationships.
    - `synthesis` means the answer should include overview/synthesis/central pages for broad comparison, strategy, evaluation, or summary questions.
    - If `--graph-rerank` was used, inspect the `LLM Graph Rerank` section and respect the reranked Final Context Pages order unless the page evidence contradicts it.
@@ -31,4 +31,5 @@ If the user accepts saving:
 
 1. Update `wiki/synthesis.md`, create `wiki/comparisons/<slug>.md`, or create another fitting page under `wiki/`.
 2. Run `cwiki index .`.
-3. Append to `wiki/log.md`.
+3. Run `cwiki link-graph-report .` after link changes.
+4. Append to `wiki/log.md`.

@@ -25,6 +25,16 @@ from xml.etree import ElementTree
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_ROOT = PROJECT_ROOT / "templates"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from cwiki_core.ingest_workflow import (  # noqa: E402
+    INGEST_STEPS,
+    STEP_STATUSES,
+    create_ingest_run,
+    format_ingest_status,
+    update_ingest_step,
+)
+
 WIKI_SECTIONS = ["summaries", "entities", "concepts", "comparisons"]
 IGNORED_WIKI_FILES = {"index.md", "log.md"}
 DEFAULT_TOP_K = 6
@@ -410,9 +420,11 @@ def init_wiki(target: str, domain: str | None) -> None:
             ".cwiki/briefs/**\n"
             ".cwiki/answers/**\n"
             ".cwiki/web-research/**\n"
+            ".cwiki/web-captures/**\n"
             ".cwiki/web-gaps/**\n"
             ".cwiki/eval/**\n"
             ".cwiki/graph/**\n"
+            ".cwiki/ingest-runs/**\n"
             ".cwiki/usage/**\n"
             ".env\n"
             ".DS_Store\n"
@@ -3924,7 +3936,7 @@ def graph_wiki(target: str) -> None:
     graph = build_wiki_graph(root)
     output_file = write_graph_json(root, graph)
     stats = graph["stats"]
-    print(f"Created graph: {output_file.relative_to(root).as_posix()}")
+    print(f"Created link graph: {output_file.relative_to(root).as_posix()}")
     print(
         f"Nodes: {stats['node_count']} | Edges: {stats['edge_count']} | "
         f"Broken: {stats['broken_edge_count']} | Isolated: {stats['isolated_node_count']}"
@@ -3938,8 +3950,8 @@ def graph_report_wiki(target: str) -> None:
     graph_file = write_graph_json(root, graph)
     report_file = graph_dir(root) / "graph.md"
     report_file.write_text(render_graph_report(graph), encoding="utf-8")
-    print(f"Created graph: {graph_file.relative_to(root).as_posix()}")
-    print(f"Created graph report: {report_file.relative_to(root).as_posix()}")
+    print(f"Created link graph: {graph_file.relative_to(root).as_posix()}")
+    print(f"Created link graph report: {report_file.relative_to(root).as_posix()}")
 
 
 def resolve_graph_slug(value: str, nodes: dict[str, dict[str, object]]) -> str:
@@ -5013,6 +5025,64 @@ def render_research_focus_section(research_focus: str, language: str = "en") -> 
     return f"## {heading}\n\n{research_focus}\n"
 
 
+def render_web_capture_checklist(
+    question: str,
+    research_file: Path,
+    fusion_prompt_file: Path,
+    wiki_weight: float,
+    web_weight: float,
+    web_mode: str,
+    max_web_sources: int,
+) -> str:
+    date = today()
+    return f"""---
+title: Web Capture Checklist - {question}
+tags: [web, capture, checklist]
+sources: 0
+updated: {date}
+status: pending
+wiki_weight: {wiki_weight}
+web_weight: {web_weight}
+web_mode: {web_mode}
+---
+
+# Web Capture Checklist - {question}
+
+This checklist prevents important browser research from staying only in `.cwiki/` working files.
+
+## Question
+
+{question}
+
+## Linked Artifacts
+
+- Web research workspace: `{research_file.as_posix()}`
+- Evidence fusion prompt: `{fusion_prompt_file.as_posix()}`
+
+## Policy
+
+- Web mode: {web_mode}
+- Max web sources: {max_web_sources}
+- Local wiki weight: {wiki_weight}
+- Web search weight: {web_weight}
+- If web mode is `disabled`, leave the source table empty and note that no external source was used.
+- For every web source that materially changes the final answer, add a capture command before treating it as durable wiki knowledge.
+- After capture, run the generated ingest prompt and update `wiki/` with source-backed Claim Ledger rows.
+
+## Source Capture Table
+
+| Used in answer? | Title | URL | Capture command | Captured raw path | Ingested into wiki? | Notes |
+|---|---|---|---|---|---|---|
+| no |  |  | `cwiki capture . <url> --title "<title>"` |  | no |  |
+
+## Follow-up
+
+- Update this file while filling the web research workspace.
+- Capture durable sources with `cwiki capture . <url> --title "<title>"`.
+- Re-run `cwiki ingest-plan . --source <captured-raw-file>` for source-backed wiki updates when the user approves persistence.
+"""
+
+
 def create_web_query_prompt(
     target: str,
     question: str,
@@ -5022,7 +5092,7 @@ def create_web_query_prompt(
     web_weight: float = DEFAULT_WEB_WEIGHT,
     web_enabled: bool = True,
     research_focus: str = "",
-) -> tuple[Path, Path, Path, Path, list[tuple[Page, int]], str, str]:
+) -> tuple[Path, Path, Path, Path, Path, list[tuple[Page, int]], str, str]:
     root = Path(target).resolve()
     assert_wiki(root)
     validate_weights(wiki_weight, web_weight)
@@ -5033,10 +5103,12 @@ def create_web_query_prompt(
     ensure_dir(root / ".cwiki" / "prompts")
     ensure_dir(root / ".cwiki" / "briefs")
     ensure_dir(root / ".cwiki" / "web-research")
+    ensure_dir(root / ".cwiki" / "web-captures")
     prompt_file = root / ".cwiki" / "prompts" / f"web-query-{date}-{slug}.md"
     fusion_prompt_file = root / ".cwiki" / "prompts" / f"fusion-{date}-{slug}.md"
     brief_file = root / ".cwiki" / "briefs" / f"web-brief-{date}-{slug}.md"
     research_file = root / ".cwiki" / "web-research" / f"web-research-{date}-{slug}.md"
+    capture_checklist_file = root / ".cwiki" / "web-captures" / f"web-captures-{date}-{slug}.md"
     effective_web_sources = max_web_sources if web_enabled and web_weight > 0 else 0
     web_mode = "enabled" if effective_web_sources > 0 else "disabled"
 
@@ -5102,10 +5174,11 @@ If web mode is `disabled`, do not search the web. Use local wiki evidence only a
 5. Open and inspect each cited web source. Do not cite search result snippets as evidence.
 6. For every external factual claim, cite a URL and include the access date `{date}`.
 7. Write findings into `{research_file.relative_to(root).as_posix()}`.
-8. Then use `{fusion_prompt_file.relative_to(root).as_posix()}` to produce the final answer.
-9. Separate `Local wiki evidence`, `Web evidence`, `Synthesis`, `Gaps`, and `Sources`.
-10. If web evidence should become durable wiki knowledge, first run `cwiki capture . <url> --title "<title>"`, then process the generated ingest prompt with user approval.
-11. Do not silently overwrite local wiki conclusions with web results. Call out conflicts and uncertainty.
+8. Maintain the durable-source checklist in `{capture_checklist_file.relative_to(root).as_posix()}`.
+9. Then use `{fusion_prompt_file.relative_to(root).as_posix()}` to produce the final answer.
+10. Separate `Local wiki evidence`, `Web evidence`, `Synthesis`, `Gaps`, and `Sources`.
+11. If web evidence should become durable wiki knowledge, first run `cwiki capture . <url> --title "<title>"`, then process the generated ingest prompt with user approval.
+12. Do not silently overwrite local wiki conclusions with web results. Call out conflicts and uncertainty.
 
 ## Required Source Table
 
@@ -5118,13 +5191,53 @@ If web mode is `disabled`, do not search the web. Use local wiki evidence only a
 {context_sections}
 """
     prompt_file.write_text(prompt, encoding="utf-8")
-    research = render_web_research_template(question, hits, wiki_weight, web_weight, web_mode, effective_web_sources, research_focus)
+    capture_checklist = render_web_capture_checklist(
+        question,
+        research_file,
+        fusion_prompt_file,
+        wiki_weight,
+        web_weight,
+        web_mode,
+        effective_web_sources,
+    )
+    capture_checklist_file.write_text(capture_checklist, encoding="utf-8")
+    research = render_web_research_template(
+        question,
+        hits,
+        wiki_weight,
+        web_weight,
+        web_mode,
+        effective_web_sources,
+        capture_checklist_file,
+        research_focus,
+    )
     research_file.write_text(research, encoding="utf-8")
-    fusion_prompt = render_fusion_prompt(question, hits, research_file, wiki_weight, web_weight, web_mode, research_focus)
+    fusion_prompt = render_fusion_prompt(
+        question,
+        hits,
+        research_file,
+        capture_checklist_file,
+        wiki_weight,
+        web_weight,
+        web_mode,
+        research_focus,
+    )
     fusion_prompt_file.write_text(fusion_prompt, encoding="utf-8")
-    brief = render_web_brief(question, hits, prompt_file, fusion_prompt_file, research_file, effective_web_sources, wiki_weight, web_weight, web_mode, research_focus)
+    brief = render_web_brief(
+        question,
+        hits,
+        prompt_file,
+        fusion_prompt_file,
+        research_file,
+        capture_checklist_file,
+        effective_web_sources,
+        wiki_weight,
+        web_weight,
+        web_mode,
+        research_focus,
+    )
     brief_file.write_text(brief, encoding="utf-8")
-    return prompt_file, brief_file, research_file, fusion_prompt_file, hits, prompt, brief
+    return prompt_file, brief_file, research_file, fusion_prompt_file, capture_checklist_file, hits, prompt, brief
 
 
 def validate_weights(wiki_weight: float, web_weight: float) -> None:
@@ -5151,6 +5264,7 @@ def render_web_research_template(
     web_weight: float,
     web_mode: str,
     max_web_sources: int,
+    capture_checklist_file: Path,
     research_focus: str = "",
 ) -> str:
     date = today()
@@ -5195,6 +5309,7 @@ This is the browser research workspace. Fill it before producing the final answe
 - If max web sources is `0`, do not browse.
 - Prefer primary sources and durable references.
 - Open each source before citing it.
+- Maintain durable-source decisions in `{capture_checklist_file.as_posix()}`.
 
 ## Web Sources
 
@@ -5221,6 +5336,7 @@ This is the browser research workspace. Fill it before producing the final answe
 ## Recommended Captures
 
 - Add `cwiki capture . <url> --title "<title>"` commands for durable web sources worth ingesting.
+- Mirror every durable-source decision in `{capture_checklist_file.as_posix()}`.
 """
 
 
@@ -5228,6 +5344,7 @@ def render_fusion_prompt(
     question: str,
     hits: list[tuple[Page, int]],
     research_file: Path,
+    capture_checklist_file: Path,
     wiki_weight: float,
     web_weight: float,
     web_mode: str,
@@ -5266,6 +5383,10 @@ web_mode: {web_mode}
 
 `{research_file.as_posix()}`
 
+### Web Capture Checklist
+
+`{capture_checklist_file.as_posix()}`
+
 ## Fusion Policy
 
 - Local wiki weight: {wiki_weight}
@@ -5278,12 +5399,13 @@ web_mode: {web_mode}
 1. Read `CLAUDE.md`, `WIKI_SCHEMA.md`, and `wiki/index.md`.
 2. Read the local wiki pages listed above in full.
 3. Read the web research file after browser research has been completed.
-4. If web mode is `disabled`, do not browse and ignore empty web sections.
-5. Produce a final answer with sections for local wiki evidence, web evidence, synthesis, gaps, and sources.
-6. Use local citations like `[[slug]]` and source paths from claim ledgers.
-7. Use Markdown links for web sources and include access dates from the research file.
-8. If local and web evidence conflict, explain the conflict and which source has more weight under the configured policy.
-9. Do not write the final answer into `wiki/` unless the user asks to preserve it.
+4. Read the web capture checklist and call out which web sources still need capture before durable ingest.
+5. If web mode is `disabled`, do not browse and ignore empty web sections.
+6. Produce a final answer with sections for local wiki evidence, web evidence, synthesis, gaps, and sources.
+7. Use local citations like `[[slug]]` and source paths from claim ledgers.
+8. Use Markdown links for web sources and include access dates from the research file.
+9. If local and web evidence conflict, explain the conflict and which source has more weight under the configured policy.
+10. Do not write the final answer into `wiki/` unless the user asks to preserve it.
 """
 
 
@@ -5293,6 +5415,7 @@ def render_web_brief(
     prompt_file: Path,
     fusion_prompt_file: Path,
     research_file: Path,
+    capture_checklist_file: Path,
     max_web_sources: int,
     wiki_weight: float,
     web_weight: float,
@@ -5337,11 +5460,13 @@ status: draft
 - 外部事实必须带 URL、发布方/作者和访问日期 `{date}`。
 - 回答时区分本地 wiki 证据、网络证据、综合结论和缺口。
 - 值得沉淀的网络来源先用 `cwiki capture` 记录到 `raw/captures/`，再由 agent 摄入到 `wiki/`。
+- 同步维护 `{capture_checklist_file.name}`，避免重要网页只停留在临时研究文件里。
 
 ## 中间产物
 
 - Web query prompt: `{prompt_file.name}`
 - Web research workspace: `{research_file.name}`
+- Web capture checklist: `{capture_checklist_file.name}`
 - Evidence fusion prompt: `{fusion_prompt_file.name}`
 """
 
@@ -5376,11 +5501,13 @@ This is a web research task brief, not a final answer. It combines local wiki co
 - External factual claims need a URL, publisher/author, and access date `{date}`.
 - Separate local wiki evidence, web evidence, synthesis, and gaps.
 - Durable web sources should be captured with `cwiki capture` before ingesting them into `wiki/`.
+- Keep `{capture_checklist_file.name}` updated so durable web sources are not stranded in working files.
 
 ## Artifacts
 
 - Web query prompt: `{prompt_file.name}`
 - Web research workspace: `{research_file.name}`
+- Web capture checklist: `{capture_checklist_file.name}`
 - Evidence fusion prompt: `{fusion_prompt_file.name}`
 """
 
@@ -5406,7 +5533,7 @@ def web_ask_wiki(
     if no_web:
         env_web_enabled = False
     web_enabled = env_web_enabled and resolved_web_weight > 0 and resolved_max_web_sources > 0
-    prompt_file, brief_file, research_file, fusion_prompt_file, hits, prompt, brief = create_web_query_prompt(
+    prompt_file, brief_file, research_file, fusion_prompt_file, capture_checklist_file, hits, prompt, brief = create_web_query_prompt(
         target,
         question,
         top_k,
@@ -5418,6 +5545,7 @@ def web_ask_wiki(
     print(f"Created web query prompt: {prompt_file.relative_to(root).as_posix()}")
     print(f"Created web brief: {brief_file.relative_to(root).as_posix()}")
     print(f"Created web research workspace: {research_file.relative_to(root).as_posix()}")
+    print(f"Created web capture checklist: {capture_checklist_file.relative_to(root).as_posix()}")
     print(f"Created evidence fusion prompt: {fusion_prompt_file.relative_to(root).as_posix()}")
     print(f"Evidence weights: wiki={resolved_wiki_weight}, web={resolved_web_weight}, web_mode={'enabled' if web_enabled else 'disabled'}")
     if web_enabled:
@@ -5498,7 +5626,7 @@ def create_web_followup_for_answer_gaps(
 
     question = str(eval_result.get("question") or extract_question_from_answer(answer_text, parse_frontmatter(answer_text)) or answer_file.stem)
     focus = render_web_gap_focus(question, signal, answer_file, root)
-    prompt_file, brief_file, research_file, fusion_prompt_file, _hits, _prompt, _brief = create_web_query_prompt(
+    prompt_file, brief_file, research_file, fusion_prompt_file, capture_checklist_file, _hits, _prompt, _brief = create_web_query_prompt(
         root.as_posix(),
         question,
         top_k,
@@ -5517,6 +5645,7 @@ def create_web_followup_for_answer_gaps(
         brief_file,
         research_file,
         fusion_prompt_file,
+        capture_checklist_file,
         resolved_wiki_weight,
         resolved_web_weight,
         resolved_max_sources,
@@ -5526,6 +5655,7 @@ def create_web_followup_for_answer_gaps(
             "web_query_prompt": display_path(prompt_file, root),
             "web_brief": display_path(brief_file, root),
             "web_research_file": display_path(research_file, root),
+            "web_capture_checklist": display_path(capture_checklist_file, root),
             "fusion_prompt": display_path(fusion_prompt_file, root),
             "followup_report": display_path(report_file, root),
         }
@@ -5621,6 +5751,7 @@ def write_web_gap_followup_report(
     brief_file: Path,
     research_file: Path,
     fusion_prompt_file: Path,
+    capture_checklist_file: Path,
     wiki_weight: float,
     web_weight: float,
     max_web_sources: int,
@@ -5662,6 +5793,7 @@ The answer or its evaluation contained gaps that require current or external evi
 - Web query prompt: `{display_path(prompt_file, root)}`
 - Web brief: `{display_path(brief_file, root)}`
 - Web research workspace: `{display_path(research_file, root)}`
+- Web capture checklist: `{display_path(capture_checklist_file, root)}`
 - Evidence fusion prompt: `{display_path(fusion_prompt_file, root)}`
 
 ## Next Step
@@ -5682,6 +5814,7 @@ def render_web_followup_cli_summary(root: Path, followup: dict[str, object]) -> 
         f"- Web mode: {followup.get('web_mode', '-')}\n"
         f"- Web query prompt: {followup.get('web_query_prompt')}\n"
         f"- Web research workspace: {followup.get('web_research_file')}\n"
+        f"- Web capture checklist: {followup.get('web_capture_checklist')}\n"
         f"- Evidence fusion prompt: {followup.get('fusion_prompt')}\n"
         f"- Follow-up report: {followup.get('followup_report')}"
     )
@@ -6349,6 +6482,35 @@ Final note must include:
     print(f"Created ingest prompt: {prompt_file.relative_to(root).as_posix()}")
 
 
+def ingest_plan_wiki(target: str, source: str | None, prompt: str | None, run_id: str | None) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    run = create_ingest_run(root, source, prompt, run_id)
+    artifacts = run.get("artifacts", {}) if isinstance(run.get("artifacts"), dict) else {}
+    print(f"Ingest run: {run['id']}")
+    print(f"Current step: {run['current_step']}")
+    print(f"Saved ingest plan: {artifacts.get('run_markdown')}")
+    print(f"Saved ingest state: {artifacts.get('run_json')}")
+    print("Pipeline: status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval")
+
+
+def ingest_status_wiki(target: str, run: str | None = None) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    print(format_ingest_status(root, run))
+
+
+def ingest_step_wiki(target: str, run: str | None, step: str, status: str, note: str | None) -> None:
+    root = Path(target).resolve()
+    assert_wiki(root)
+    updated = update_ingest_step(root, run, step, status, note)
+    artifacts = updated.get("artifacts", {}) if isinstance(updated.get("artifacts"), dict) else {}
+    print(f"Updated ingest run: {updated['id']}")
+    print(f"Step `{step}`: {status}")
+    print(f"Current step: {updated.get('current_step')}")
+    print(f"Saved ingest plan: {artifacts.get('run_markdown')}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cwiki",
@@ -6366,7 +6528,9 @@ def build_parser() -> argparse.ArgumentParser:
   cwiki eval-schedule . --every-days 7 --llm
   cwiki usage-report .
   cwiki usage-log . --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
-  cwiki graph-report .
+  cwiki ingest-plan . --source raw/captures/example.md
+  cwiki ingest-status .
+  cwiki link-graph-report .
   cwiki path . retrieval synthesis
   cwiki search . "retrieval"
   cwiki lint .
@@ -6449,11 +6613,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_schedule_parser.add_argument("--base-url", default=None)
     eval_schedule_parser.add_argument("--max-output-tokens", type=int, default=1000)
 
-    graph_parser = subparsers.add_parser("graph", help="Generate .cwiki/graph/graph.json from wiki links")
+    graph_parser = subparsers.add_parser("graph", help="Generate link graph JSON from wiki links")
     graph_parser.add_argument("dir")
 
-    graph_report_parser = subparsers.add_parser("graph-report", help="Generate graph.json and graph.md")
+    graph_report_parser = subparsers.add_parser("graph-report", help="Generate link graph JSON and report")
     graph_report_parser.add_argument("dir")
+
+    link_graph_parser = subparsers.add_parser("link-graph", help="Alias for graph; generate wikilink navigation graph JSON")
+    link_graph_parser.add_argument("dir")
+
+    link_graph_report_parser = subparsers.add_parser("link-graph-report", help="Alias for graph-report; generate wikilink navigation graph report")
+    link_graph_report_parser.add_argument("dir")
 
     path_parser = subparsers.add_parser("path", help="Find the shortest wikilink path between two wiki pages")
     path_parser.add_argument("dir")
@@ -6493,6 +6663,25 @@ def build_parser() -> argparse.ArgumentParser:
     usage_log_parser.add_argument("--question", default=None)
     usage_log_parser.add_argument("--status", default="completed")
     usage_log_parser.add_argument("--metadata-json", default=None)
+
+    status_parser = subparsers.add_parser("status", help="Show latest ingest run status")
+    status_parser.add_argument("dir")
+
+    ingest_plan_parser = subparsers.add_parser("ingest-plan", help="Create a recoverable ingest run plan")
+    ingest_plan_parser.add_argument("dir")
+    ingest_plan_parser.add_argument("--source", default=None)
+    ingest_plan_parser.add_argument("--prompt", default=None)
+    ingest_plan_parser.add_argument("--run-id", default=None)
+
+    ingest_status_parser = subparsers.add_parser("ingest-status", help="Show ingest run status")
+    ingest_status_parser.add_argument("dir")
+    ingest_status_parser.add_argument("run", nargs="?")
+
+    ingest_step_parser = subparsers.add_parser("ingest-step", help="Update one ingest run step")
+    ingest_step_parser.add_argument("dir")
+    ingest_step_parser.add_argument("items", nargs="+", help="Either <step> or <run> <step>")
+    ingest_step_parser.add_argument("--status", required=True, choices=sorted(STEP_STATUSES))
+    ingest_step_parser.add_argument("--note", default=None)
 
     ask_parser = subparsers.add_parser("ask", help="Create a query prompt from wiki context")
     ask_parser.add_argument("dir")
@@ -6601,9 +6790,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.base_url,
                 args.max_output_tokens,
             )
-        elif args.command == "graph":
+        elif args.command in {"graph", "link-graph"}:
             graph_wiki(args.dir)
-        elif args.command == "graph-report":
+        elif args.command in {"graph-report", "link-graph-report"}:
             graph_report_wiki(args.dir)
         elif args.command == "path":
             return path_wiki(args.dir, args.source, args.target)
@@ -6639,6 +6828,26 @@ def main(argv: list[str] | None = None) -> int:
                 args.status,
                 args.metadata_json,
             )
+        elif args.command == "status":
+            ingest_status_wiki(args.dir)
+        elif args.command == "ingest-plan":
+            ingest_plan_wiki(args.dir, args.source, args.prompt, args.run_id)
+        elif args.command == "ingest-status":
+            ingest_status_wiki(args.dir, args.run)
+        elif args.command == "ingest-step":
+            if len(args.items) == 1:
+                run_id = None
+                step = args.items[0]
+            elif len(args.items) == 2:
+                if args.items[0] in INGEST_STEPS:
+                    step = args.items[0]
+                    run_id = args.items[1]
+                else:
+                    run_id = args.items[0]
+                    step = args.items[1]
+            else:
+                raise RuntimeError("ingest-step expects either `<step>` or `<run> <step>`.")
+            ingest_step_wiki(args.dir, run_id, step, args.status, args.note)
         elif args.command == "ask":
             ask_wiki(
                 args.dir,

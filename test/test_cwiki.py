@@ -55,9 +55,11 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
+            self.assertIn(".cwiki/web-captures/**", gitignore)
             self.assertIn(".cwiki/web-gaps/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
             self.assertIn(".cwiki/graph/**", gitignore)
+            self.assertIn(".cwiki/ingest-runs/**", gitignore)
             self.assertIn(".cwiki/usage/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
@@ -217,8 +219,8 @@ Reranking links to [[retrieval]].
                 encoding="utf-8",
             )
 
-            graph_result = run_cwiki("graph", str(root))
-            self.assertIn("Created graph:", graph_result.stdout)
+            graph_result = run_cwiki("link-graph", str(root))
+            self.assertIn("Created link graph:", graph_result.stdout)
             graph_file = root / ".cwiki" / "graph" / "graph.json"
             graph = json.loads(graph_file.read_text(encoding="utf-8"))
             self.assertEqual(graph["stats"]["node_count"], 4)
@@ -227,8 +229,8 @@ Reranking links to [[retrieval]].
             retrieval = next(node for node in graph["nodes"] if node["id"] == "retrieval")
             self.assertIn("raw/captures/source.md", retrieval["claim_sources"])
 
-            report_result = run_cwiki("graph-report", str(root))
-            self.assertIn("Created graph report:", report_result.stdout)
+            report_result = run_cwiki("link-graph-report", str(root))
+            self.assertIn("Created link graph report:", report_result.stdout)
             report = (root / ".cwiki" / "graph" / "graph.md").read_text(encoding="utf-8")
             self.assertIn("Broken Links", report)
             self.assertIn("[[retrieval]] -> [[missing-page]]", report)
@@ -893,6 +895,61 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertIn("status: seed", prompt_text)
             self.assertIn("What changed in `wiki/overview.md`", prompt_text)
             self.assertIn("What changed in `wiki/synthesis.md`", prompt_text)
+
+    def test_ingest_plan_status_and_step_are_recoverable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Recoverable ingest test")
+            run_cwiki("capture", str(root), "https://example.com/some-article", "--title", "Some Article")
+
+            before = run_cwiki("status", str(root))
+            self.assertIn("No ingest runs exist yet", before.stdout)
+            self.assertIn("Latest ingest prompt:", before.stdout)
+
+            date = dt.date.today().isoformat()
+            source = f"raw/captures/{date}-some-article.md"
+            prompt = f".cwiki/prompts/ingest-{date}-some-article.md"
+            plan = run_cwiki(
+                "ingest-plan",
+                str(root),
+                "--source",
+                source,
+                "--prompt",
+                prompt,
+                "--run-id",
+                "demo-ingest",
+            )
+            self.assertIn("Ingest run: ingest-run-demo-ingest", plan.stdout)
+            self.assertIn("Pipeline: status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval", plan.stdout)
+
+            run_json = root / ".cwiki" / "ingest-runs" / "ingest-run-demo-ingest.json"
+            run_md = root / ".cwiki" / "ingest-runs" / "ingest-run-demo-ingest.md"
+            self.assertTrue(run_json.exists())
+            self.assertTrue(run_md.exists())
+            payload = json.loads(run_json.read_text(encoding="utf-8"))
+            self.assertEqual(payload["current_step"], "apply")
+            self.assertEqual(payload["prompt"], prompt)
+
+            status = run_cwiki("ingest-status", str(root), "ingest-run-demo-ingest")
+            self.assertIn("# Ingest Run - ingest-run-demo-ingest", status.stdout)
+            self.assertIn("| apply | pending |", status.stdout)
+
+            updated = run_cwiki(
+                "ingest-step",
+                str(root),
+                "ingest-run-demo-ingest",
+                "apply",
+                "--status",
+                "completed",
+                "--note",
+                "wiki pages updated",
+            )
+            self.assertIn("Step `apply`: completed", updated.stdout)
+            payload = json.loads(run_json.read_text(encoding="utf-8"))
+            apply_step = next(step for step in payload["steps"] if step["name"] == "apply")
+            self.assertEqual(apply_step["status"], "completed")
+            self.assertIn("wiki pages updated", apply_step["notes"])
+            self.assertEqual(payload["current_step"], "validate")
 
     def test_capture_extracts_docx_text(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -1753,11 +1810,13 @@ question: 当处理什么业务场景时，选择 llm wiki 而不是 RAG？
             fusions = list((root / ".cwiki" / "prompts").glob("fusion-*.md"))
             briefs = list((root / ".cwiki" / "briefs").glob("web-brief-*.md"))
             research = list((root / ".cwiki" / "web-research").glob("web-research-*.md"))
+            captures = list((root / ".cwiki" / "web-captures").glob("web-captures-*.md"))
             gap_reports = list((root / ".cwiki" / "web-gaps").glob("web-gap-*.md"))
             self.assertEqual(len(prompts), 1)
             self.assertEqual(len(fusions), 1)
             self.assertEqual(len(briefs), 1)
             self.assertEqual(len(research), 1)
+            self.assertEqual(len(captures), 1)
             self.assertEqual(len(gap_reports), 1)
             prompt_text = prompts[0].read_text(encoding="utf-8")
             self.assertIn("## Research Focus", prompt_text)
@@ -1767,7 +1826,11 @@ question: 当处理什么业务场景时，选择 llm wiki 而不是 RAG？
             self.assertIn("wiki-agent-browser", prompt_text)
             self.assertIn("Evidence Fusion Prompt", fusions[0].read_text(encoding="utf-8"))
             self.assertIn("web_mode: enabled", research[0].read_text(encoding="utf-8"))
-            self.assertIn("Web Gap Follow-up", gap_reports[0].read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", captures[0].read_text(encoding="utf-8"))
+            self.assertIn("cwiki capture . <url> --title", captures[0].read_text(encoding="utf-8"))
+            gap_report_text = gap_reports[0].read_text(encoding="utf-8")
+            self.assertIn("Web Gap Follow-up", gap_report_text)
+            self.assertIn("Web capture checklist", gap_report_text)
 
     def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -1804,6 +1867,7 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("Created web query prompt:", result.stdout)
             self.assertIn("Created web brief:", result.stdout)
             self.assertIn("Created web research workspace:", result.stdout)
+            self.assertIn("Created web capture checklist:", result.stdout)
             self.assertIn("Created evidence fusion prompt:", result.stdout)
             self.assertIn("Evidence weights: wiki=0.7, web=0.3, web_mode=enabled", result.stdout)
             self.assertIn("the CLI does not browse by itself", result.stdout)
@@ -1813,10 +1877,12 @@ Retrieval finds relevant evidence before synthesis.
             fusion = root / ".cwiki" / "prompts" / f"fusion-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             brief = root / ".cwiki" / "briefs" / f"web-brief-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            captures = root / ".cwiki" / "web-captures" / f"web-captures-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(fusion.exists())
             self.assertTrue(brief.exists())
             self.assertTrue(research.exists())
+            self.assertTrue(captures.exists())
             prompt_text = prompt.read_text(encoding="utf-8")
             self.assertIn("wiki-agent-browser", prompt_text)
             self.assertIn("Search the web for up to 4 high-quality sources", prompt_text)
@@ -1824,8 +1890,12 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("For every external factual claim, cite a URL", prompt_text)
             self.assertIn("Local wiki weight: 0.7", prompt_text)
             self.assertIn("Web search weight: 0.3", prompt_text)
+            self.assertIn("web-captures", prompt_text)
             self.assertIn("web_mode: enabled", research.read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", captures.read_text(encoding="utf-8"))
+            self.assertIn("Source Capture Table", captures.read_text(encoding="utf-8"))
             self.assertIn("Evidence Fusion Prompt", fusion.read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", fusion.read_text(encoding="utf-8"))
 
     def test_web_ask_can_disable_web_research(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -1843,9 +1913,11 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("web_mode=disabled", result.stdout)
             prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
             research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
+            captures = root / ".cwiki" / "web-captures" / f"web-captures-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
             self.assertIn("Web mode: disabled", prompt.read_text(encoding="utf-8"))
             self.assertIn("Search the web for up to 0 high-quality sources", prompt.read_text(encoding="utf-8"))
             self.assertIn("web_mode: disabled", research.read_text(encoding="utf-8"))
+            self.assertIn("Web mode: disabled", captures.read_text(encoding="utf-8"))
 
     def test_web_ask_reads_defaults_from_env_file(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
