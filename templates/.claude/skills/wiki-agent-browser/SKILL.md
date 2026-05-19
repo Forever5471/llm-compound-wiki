@@ -32,15 +32,17 @@ Use this skill when:
    - reputable journalism only when primary sources are unavailable
 7. Keep source notes with title, URL, publisher or author, publication date when visible, and access date.
 8. Write browser findings into `.cwiki/web-research/web-research-*.md`.
-9. Read the generated `.cwiki/prompts/fusion-*.md`.
-10. Answer with clear sections:
+9. Update `.cwiki/web-captures/web-captures-*.md` with durable-source decisions.
+10. Read the generated `.cwiki/prompts/fusion-*.md`.
+11. Answer with clear sections:
    - Local wiki evidence
    - Web evidence
    - Synthesis
    - Gaps and uncertainty
    - Sources
-11. Cite local evidence with `[[slug]]` and source paths from claim ledgers.
-12. Cite web evidence with Markdown links to the exact URLs used.
+12. Cite local evidence with `[[slug]]` and source paths from claim ledgers.
+13. Cite web evidence with Markdown links to the exact URLs used.
+14. If the agent platform shows token or cost numbers for browser research or synthesis, record them with `cwiki usage-log . --operation web-research --provider agent-platform --model <visible-model-name> ...`.
 
 ## Evidence Weights
 
@@ -56,11 +58,12 @@ Weights are synthesis guidance, not mathematical truth.
 If web evidence should become durable wiki knowledge:
 
 1. Run `cwiki capture . <url> --title "<title>"` for each important web source.
-2. Process the generated `.cwiki/prompts/ingest-*.md` with `wiki-ingest`.
-3. Preserve source language unless the user asks for translation.
-4. Update affected wiki pages with source-backed claim ledger rows.
-5. Run `cwiki index .`.
-6. Append to `wiki/log.md`.
+2. Mark the source in `.cwiki/web-captures/web-captures-*.md` with the captured raw path.
+3. Process the generated `.cwiki/prompts/ingest-*.md` with `wiki-ingest`.
+4. Preserve source language unless the user asks for translation.
+5. Update affected wiki pages with source-backed claim ledger rows.
+6. Run `cwiki index .`.
+7. Append to `wiki/log.md`.
 
 ## Rules
 
@@ -70,4 +73,5 @@ If web evidence should become durable wiki knowledge:
 - Every external factual claim needs a URL.
 - Record the access date for web evidence.
 - Keep `.cwiki/web-research/*.md` as the auditable browser research artifact for the final answer.
+- Keep `.cwiki/web-captures/*.md` as the handoff for durable source capture.
 - If a site is inaccessible, paywalled, or ambiguous, say so and choose another source.

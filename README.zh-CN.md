@@ -4,7 +4,7 @@ LLM Compound Wiki 是一套“AI 持续维护的复利型知识库”开源脚�
 
 在任意文件夹里构建一个由 agent 持续维护的 Markdown wiki。
 
-不需要数据库。不需要 embedding 服务。不绑定模型或平台。
+默认路径不需要数据库、不需要 embedding 服务，也不绑定模型或平台；中大规模 wiki 可以后续接入可选 embedding/vector index。
 
 可以配合 Codex、Claude Code、Cursor、Trae、OpenCode，或任何能读写文件系统的 agent 使用。
 
@@ -41,7 +41,9 @@ flowchart TD
     wiki --> claims["claim ledger + wikilinks + log"]
     web["网络来源"] --> browser["具备浏览器能力的 agent"]
     browser --> research[".cwiki/web-research/"]
+    browser --> captures[".cwiki/web-captures/ 清单"]
     research --> agent
+    captures --> capture
 ```
 
 ## 执行模型
@@ -62,7 +64,8 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 | 不绑定具体 agent | 是 |
 | 兼容 Obsidian Markdown | 是 |
 | 零依赖 Python CLI | 是 |
-| 不依赖 embedding 的本地搜索 | 是 |
+| 默认不依赖 embedding 的本地搜索 | 是 |
+| 可选 embedding/vector index | 规划扩展 |
 | Claim Ledger 和操作日志 | 是 |
 | 初始化后自带 agent skills | 是 |
 | 托管知识库服务 | 否 |
@@ -73,7 +76,7 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 ## 它不是什么
 
 - 不是托管知识库应用。
-- 不是向量数据库或 embedding 服务。
+- 不是托管向量数据库，也不强制依赖 embedding 服务。
 - 不是会静默重写 wiki 的全自动爬虫。
 - 不绑定某个模型供应商、编辑器或 agent 平台。
 - 不能替代人对“哪些来源值得沉淀为长期知识”的判断。
@@ -95,6 +98,7 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 │   └── .agents/skills/       兼容其他 agent 的入口
 ├── raw/                      用户私有原始材料，默认不进 git
 ├── .cwiki/prompts/           生成的 ingest 工作提示，默认不进 git
+├── .cwiki/usage/             本地 LLM 用量台账，默认不进 git
 ├── wiki/
 │   ├── overview.md           整个知识库的全局地图
 │   ├── synthesis.md          跨来源综合结论
@@ -200,32 +204,40 @@ cwiki lint ./my-wiki
 cwiki init <dir> [--domain "..."]
 cwiki index <dir>
 cwiki lint <dir>
-cwiki graph <dir>
-cwiki graph-report <dir>
+cwiki link-graph <dir>        # graph 保留为兼容别名
+cwiki link-graph-report <dir> # graph-report 保留为兼容别名
 cwiki path <dir> <from-slug-or-title> <to-slug-or-title>
 cwiki explain <dir> <slug-or-title>
 cwiki search <dir> <query>
-cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--show-context]
+cwiki ask <dir> <question> [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--show-context]
 cwiki web-ask <dir> <question> [--top-k 6] [--max-web-sources 6] [--wiki-weight 0.6] [--web-weight 0.4] [--no-web] [--show-context]
-cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis]
+cwiki answer <dir> <question> [--provider openai|glm] [--model "..."] [--top-k 6] [--retrieval auto|direct|graph|path|synthesis] [--graph-rerank] [--web-on-gaps]
 cwiki eval <dir> [--output <file>] [--no-write] [--json]
-cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json]
+cwiki eval-answer <dir> <answer-file> [--output <file>] [--no-write] [--json] [--llm] [--web-on-gaps]
 cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [--no-write] [--json]
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
+cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
+cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
+cwiki status <dir>
+cwiki ingest-plan <dir> [--source <raw-file>] [--prompt <prompt-file>] [--run-id <id>]
+cwiki ingest-status <dir> [run]
+cwiki ingest-step <dir> [run] <step> --status pending|in_progress|completed|blocked [--note "..."]
 cwiki capture <dir> <file-or-url> [--title "..."]
 ```
 
 `capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
 
-`ask` 也不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。
+`ingest-plan` 会在 `.cwiki/ingest-runs/` 下创建一次可恢复的摄入 run。用 `status` 或 `ingest-status` 查看最新状态，用 `ingest-step` 标记 `status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval` 的推进情况。它不替代 agent 编写 wiki 的步骤，而是给流程一份确定性的状态文件，方便中断后继续。
 
-这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。
+`ask` 默认不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。只有显式加 `--graph-rerank` 时，`ask` 才会调用 `.env` 或命令行配置的大模型，对 graph/path/synthesis 检索候选做语义重排。
+
+这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。中大规模 wiki 的扩展方向，是在现有 wiki 检索和 link graph 排序前增加可选 embedding/vector 粗召回层。
 
 在 agent 平台里问答时，推荐使用混合式 query workflow：先用 `cwiki ask` 生成可复现的 evidence prompt 和 brief；agent 先读取这些产物和其中列出的 wiki 页面；如果 prompt 上下文不足，再主动搜索 wiki、读取相邻高价值页面，并沿相关 `[[wikilink]]` 追一层。最终回答仍应遵守项目协议：包含 `## Evidence Used`、`## Answer`、`## Gaps`，用 `[[slug]]` 引用 wiki 页面，并在事实附近保留 source path 或 URL。需要实时网络证据时，应切到 `cwiki web-ask` 和 `wiki-agent-browser`，而不是依赖模型记忆。
 
 完整问答流程见 [docs/answering-workflow.zh-CN.md](docs/answering-workflow.zh-CN.md)。
 
-`graph` 和 `graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger 和 `[[wikilink]]` 生成轻量图谱层。第一版不调用大模型，也不读取 `raw/` 正文：页面是 node，wikilink 是 edge，输出 `.cwiki/graph/graph.json` 和 `.cwiki/graph/graph.md`。`path` 用无向 wikilink 图查两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。
+`link-graph` 和 `link-graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger 和 `[[wikilink]]` 生成当前的 link graph。旧命令 `graph` 和 `graph-report` 保留为兼容别名。这里的 graph 是 wikilink 导航图，不是 typed knowledge graph，也不是语义实体关系图谱。第一版不调用大模型，也不读取 `raw/` 正文：页面是 node，wikilink 是 edge，输出 `.cwiki/graph/graph.json` 和 `.cwiki/graph/graph.md`。`path` 用无向 wikilink 图查两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。
 
 `ask --retrieval auto|direct|graph|path|synthesis` 会基于这层图谱在 query prompt 中记录 Retrieval Trace：
 
@@ -235,17 +247,23 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 - `synthesis`：direct、graph、path、overview/synthesis 和中心节点一起进入上下文，适合综合总结、对比、取舍、策略和评估。
 - `auto`：由 CLI 自动选择层级。若 `auto` 选中 `path` 但没有找到路径证据，会回退到 `graph`，并在 Retrieval Trace 中记录回退原因。
 
-`web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成三类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
+加 `--graph-rerank` 后，CLI 会把 final context candidates 的标题、摘要、来源角色、路径/邻居原因交给配置的大模型，让它返回严格 JSON 排序。重排状态、选中理由和 gaps 会写入 Retrieval Trace；`answer --graph-rerank` 会把重排后的 Context Pack 继续交给最终回答模型。GLM 图重排默认发送 `thinking: disabled`，让输出 token 优先用于严格 JSON；可用 `CWIKI_GRAPH_RERANK_THINKING=enabled` 改为推理模式。
 
-当前实现里，CLI 本身不会直接联网浏览。复制到 `.claude/skills/` 和 `.agents/skills/` 的技能是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，再根据生成的 fusion prompt 综合回答。
+`web-ask` 用于“本地 wiki + 实时网络资料”的问题。它会先做本地混合检索，再生成四类中间产物：`.cwiki/prompts/web-query-*.md` 负责浏览器研究任务，`.cwiki/web-research/web-research-*.md` 负责沉淀联网搜索结果，`.cwiki/web-captures/web-captures-*.md` 负责判断哪些网页必须进入 `raw/captures/`，`.cwiki/prompts/fusion-*.md` 负责把本地 wiki 证据和 web 证据交给后续 agent 做综合性回答。默认权重是本地 wiki `0.6`、web search `0.4`；可以用 `--wiki-weight` 和 `--web-weight` 调整。`--web-weight 0` 或 `--no-web` 会关闭联网搜索，只生成本地 wiki-only 的融合 prompt。
+
+当答案或评估报告里出现“缺少外部证据”的缺口时，可以给 `cwiki answer` 或 `cwiki eval-answer` 加 `--web-on-gaps`。CLI 会检查答案里的 `## Gaps`、确定性 warning、以及可选的 LLM-assisted evaluation 文本，识别“缺少真实案例、量化指标、最新证据、迁移/实施指南”等信号；一旦触发，会生成同样的浏览器研究产物，并额外写入 `.cwiki/web-gaps/web-gap-*.md`。该流程会读取 `CWIKI_WEB_*` 默认值；也可以用 `--web-gap-max-sources`、`--web-gap-wiki-weight`、`--web-gap-web-weight` 临时覆盖。
+
+当前实现里，CLI 本身不会直接联网浏览。复制到 `.claude/skills/` 和 `.agents/skills/` 的技能是给 agent 读取的操作说明，不是 CLI 会自动执行的插件。需要把生成的 `web-query-*.md` 交给具备浏览器/联网能力的 agent，并让它使用 `wiki-agent-browser`：先搜索并打开来源，把结果写入 `.cwiki/web-research/*.md`，同步维护 `.cwiki/web-captures/*.md`，再根据生成的 fusion prompt 综合回答。
 
 未来可以增加一个纯终端的 `web-answer` 流程，把 wiki 检索、实时 web search、配置的证据权重和 `.env` 里的模型 provider 串成一个命令；但当前还没有实现。
 
-具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
+具备浏览器/搜索能力的 agent 使用 `wiki-agent-browser` 时，应先读本地 wiki，再联网搜索，打开正文后再引用，并把搜索结果写入 `.cwiki/web-research/`。同时要更新 `.cwiki/web-captures/`，确保重要网页可以沉淀到 `raw/captures/`。最终回答中要区分本地证据、网络证据、综合结论和缺口。每条外部事实都必须带 URL 和访问日期；值得长期保留的网页需要先 `cwiki capture . <url> --title "<title>"`，再摄入到 `wiki/`。
 
 `answer` 会真正调用模型，并把草稿答案写到 `.cwiki/answers/`。目前支持 OpenAI Responses API 和 GLM OpenAI-compatible Chat Completions。它会先生成同样的 query prompt 和 human brief，因此答案可追溯。草稿答案不会自动写入 `wiki/`，建议人工确认后再让 agent 把有价值的综合沉淀进编译层。
 
 `eval`、`eval-answer` 和 `eval-all` 会把质量报告写入 `.cwiki/eval/`。报告始终包含确定性本地检查和更细的质量信号。`eval-all` 默认扫描 `.cwiki/answers/` 并使用最新的 `answer-*.md` 生成综合报告；用 `--answer` 可以指定某个答案，用 `--wiki-only` 可以只评估 wiki。加 `--json` 时会输出适合 CI 或 agent 消费的结构化结果。
+
+当希望评估流程不要只停在“缺少 web evidence”这一句时，运行 `cwiki eval-answer . <answer-file> --web-on-gaps`。报告会新增“联网补证任务”区块，并指向生成的 web query、web research workspace、fusion prompt 和 follow-up report。
 
 当希望 CLI 自己调用 `.env` 里配置的模型时，可以加 `--llm` 附加 LLM-assisted evaluation。报告会写清楚本次辅助评估使用的 provider、model、状态和时间；如果没有配置 API key，确定性评估仍会完成，LLM 部分标记为 `skipped`。
 
@@ -257,6 +275,49 @@ cwiki eval-all . --answer .cwiki/answers/answer.md --agent-eval-file .cwiki/eval
 ```
 
 报告会记录 `provider: agent-platform`、传入的模型名、时间戳和辅助评估来源文件。`cwiki eval-schedule . --every-days 7 --llm` 适合终端/CLI 模型评估；如果是 agent 平台周期任务，应让平台 automation 先运行确定性 eval，再用 `--agent-eval-file` 附加当前 agent 模型写出的辅助评估。
+
+## LLM 用量与成本报告
+
+只要 CLI 自己调用 `.env` 或命令行配置的大模型，就会把 token usage 和成本元数据记录到 `.cwiki/usage/llm-usage.jsonl`。当前自动覆盖这些环节：
+
+- `answer`
+- `ask --graph-rerank`
+- `answer --graph-rerank`
+- `eval --llm`、`eval-answer --llm`、`eval-all --llm`，以及开启 `--llm` 的 scheduled eval
+
+成本只会基于你在 `.env` 中配置的单价估算，项目不会写死任何供应商价格。可以配置通用单价、provider 单价，或 provider+model 单价：
+
+```bash
+# 每 100 万 token 的价格
+CWIKI_COST_INPUT_PER_1M=0
+CWIKI_COST_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_INPUT_PER_1M=0
+CWIKI_COST_GLM_OUTPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+CWIKI_COST_CURRENCY=USD
+```
+
+生成完整报告：
+
+```bash
+cwiki usage-report .
+```
+
+也可以按环节、问题、产物、模型或时间窗口过滤：
+
+```bash
+cwiki usage-report . --operation answer
+cwiki usage-report . --question "gray_zone"
+cwiki usage-report . --artifact .cwiki/answers/answer-example.md
+cwiki usage-report . --since 2026-05-18 --json
+```
+
+agent 平台不会自动把内部 token 计数暴露给这个 CLI。当 agent 使用当前平台模型做 ingest、update、浏览器研究、解释判断或外部辅助评估时，如果平台界面能看到 token 或费用，需要用 `usage-log` 补记：
+
+```bash
+cwiki usage-log . --operation ingest --provider agent-platform --model current-agent-model --input-tokens 12000 --output-tokens 1800 --estimated-cost 0.05 --currency USD --artifact wiki/synthesis.md
+```
 
 ## 模型配置
 
@@ -271,6 +332,24 @@ GLM_API_KEY=your-local-key
 # OpenAI 可选默认值
 CWIKI_OPENAI_MODEL=gpt-5.2
 OPENAI_API_KEY=your-local-key
+
+# 可选 graph rerank 默认值。
+# 用于 `cwiki ask --graph-rerank` 和 `cwiki answer --graph-rerank`。
+# 如果不设置，会复用 CWIKI_PROVIDER / CWIKI_MODEL。
+# CWIKI_GRAPH_RERANK_PROVIDER=glm
+# CWIKI_GRAPH_RERANK_MODEL=glm-4.6v
+# CWIKI_GRAPH_RERANK_API_KEY_ENV=GLM_API_KEY
+# CWIKI_GRAPH_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+# CWIKI_GRAPH_RERANK_THINKING=disabled
+
+# 可选 token 成本单价。数值含义是每 100 万 token 的价格；项目不会写死默认价格。
+# CWIKI_COST_INPUT_PER_1M=0
+# CWIKI_COST_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_INPUT_PER_1M=0
+# CWIKI_COST_GLM_OUTPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M=0
+# CWIKI_COST_GLM_GLM_4_6V_OUTPUT_PER_1M=0
+# CWIKI_COST_CURRENCY=USD
 
 # web-ask 默认策略
 CWIKI_WEB_WIKI_WEIGHT=0.6

@@ -195,6 +195,8 @@ cwiki eval . --stale-days 30
 
 当答案链接到 `cwiki ask` 或 `cwiki answer` 生成的 query prompt 时，answer evaluation 还会读取 prompt 中的 Retrieval Trace。报告会展示本次使用的检索策略（`direct`、`graph`、`path` 或 `synthesis`）、直接命中页面使用情况、图谱扩展页面使用情况、路径证据数量、auto 回退原因和检索质量分数。这个维度用于判断检索策略是否匹配问题复杂度，以及被检索出的上下文是否真的支撑了最终回答。
 
+当希望评价不只停在“缺少外部证据”时，可以加 `--web-on-gaps`。评价器会扫描答案 `## Gaps`、确定性 warning、以及附加的 LLM-assisted evaluation，识别缺少案例、量化指标、最新事实或迁移/实施指南等信号；一旦触发，会生成 `.cwiki/web-gaps/`、web query、web research 和 fusion prompt 产物。
+
 当用户要求评估答案质量、grounding、来源使用，或某个回答是否遵守 wiki/web evidence 协议时，应使用该模式。
 
 建议输出：

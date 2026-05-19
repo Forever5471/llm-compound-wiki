@@ -23,5 +23,6 @@ Updates must be traceable.
 8. In your final note, explicitly summarize what changed in `wiki/overview.md` and `wiki/synthesis.md`.
 9. Run `cwiki index .`.
 10. Append to `wiki/log.md`.
+11. If the agent platform shows token or cost numbers for this update, record them with `cwiki usage-log . --operation update --provider agent-platform --model <visible-model-name> ...`.
 
 If new evidence contradicts old content, preserve the contradiction explicitly until the user or sources resolve it.

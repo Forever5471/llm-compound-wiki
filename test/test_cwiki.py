@@ -55,8 +55,12 @@ class CwikiTest(unittest.TestCase):
             self.assertIn(".cwiki/briefs/**", gitignore)
             self.assertIn(".cwiki/answers/**", gitignore)
             self.assertIn(".cwiki/web-research/**", gitignore)
+            self.assertIn(".cwiki/web-captures/**", gitignore)
+            self.assertIn(".cwiki/web-gaps/**", gitignore)
             self.assertIn(".cwiki/eval/**", gitignore)
             self.assertIn(".cwiki/graph/**", gitignore)
+            self.assertIn(".cwiki/ingest-runs/**", gitignore)
+            self.assertIn(".cwiki/usage/**", gitignore)
             self.assertTrue((root / ".claude" / "skills" / "wiki-init" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "wiki-ingest" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "wiki-parse-docx" / "SKILL.md").exists())
@@ -72,6 +76,7 @@ class CwikiTest(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY=replace-with-your-local-key", env_example)
             self.assertIn("CWIKI_EVAL_PROVIDER=glm", env_example)
             self.assertIn("CWIKI_WEB_WIKI_WEIGHT=0.6", env_example)
+            self.assertIn("CWIKI_COST_GLM_GLM_4_6V_INPUT_PER_1M", env_example)
             overview = (root / "wiki" / "overview.md").read_text(encoding="utf-8")
             self.assertIn("Entry Decision", overview)
             self.assertIn("Current Map", overview)
@@ -214,8 +219,8 @@ Reranking links to [[retrieval]].
                 encoding="utf-8",
             )
 
-            graph_result = run_cwiki("graph", str(root))
-            self.assertIn("Created graph:", graph_result.stdout)
+            graph_result = run_cwiki("link-graph", str(root))
+            self.assertIn("Created link graph:", graph_result.stdout)
             graph_file = root / ".cwiki" / "graph" / "graph.json"
             graph = json.loads(graph_file.read_text(encoding="utf-8"))
             self.assertEqual(graph["stats"]["node_count"], 4)
@@ -224,8 +229,8 @@ Reranking links to [[retrieval]].
             retrieval = next(node for node in graph["nodes"] if node["id"] == "retrieval")
             self.assertIn("raw/captures/source.md", retrieval["claim_sources"])
 
-            report_result = run_cwiki("graph-report", str(root))
-            self.assertIn("Created graph report:", report_result.stdout)
+            report_result = run_cwiki("link-graph-report", str(root))
+            self.assertIn("Created link graph report:", report_result.stdout)
             report = (root / ".cwiki" / "graph" / "graph.md").read_text(encoding="utf-8")
             self.assertIn("Broken Links", report)
             self.assertIn("[[retrieval]] -> [[missing-page]]", report)
@@ -891,6 +896,61 @@ Inline code `[[not-a-real-link]]` should not count.
             self.assertIn("What changed in `wiki/overview.md`", prompt_text)
             self.assertIn("What changed in `wiki/synthesis.md`", prompt_text)
 
+    def test_ingest_plan_status_and_step_are_recoverable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Recoverable ingest test")
+            run_cwiki("capture", str(root), "https://example.com/some-article", "--title", "Some Article")
+
+            before = run_cwiki("status", str(root))
+            self.assertIn("No ingest runs exist yet", before.stdout)
+            self.assertIn("Latest ingest prompt:", before.stdout)
+
+            date = dt.date.today().isoformat()
+            source = f"raw/captures/{date}-some-article.md"
+            prompt = f".cwiki/prompts/ingest-{date}-some-article.md"
+            plan = run_cwiki(
+                "ingest-plan",
+                str(root),
+                "--source",
+                source,
+                "--prompt",
+                prompt,
+                "--run-id",
+                "demo-ingest",
+            )
+            self.assertIn("Ingest run: ingest-run-demo-ingest", plan.stdout)
+            self.assertIn("Pipeline: status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval", plan.stdout)
+
+            run_json = root / ".cwiki" / "ingest-runs" / "ingest-run-demo-ingest.json"
+            run_md = root / ".cwiki" / "ingest-runs" / "ingest-run-demo-ingest.md"
+            self.assertTrue(run_json.exists())
+            self.assertTrue(run_md.exists())
+            payload = json.loads(run_json.read_text(encoding="utf-8"))
+            self.assertEqual(payload["current_step"], "apply")
+            self.assertEqual(payload["prompt"], prompt)
+
+            status = run_cwiki("ingest-status", str(root), "ingest-run-demo-ingest")
+            self.assertIn("# Ingest Run - ingest-run-demo-ingest", status.stdout)
+            self.assertIn("| apply | pending |", status.stdout)
+
+            updated = run_cwiki(
+                "ingest-step",
+                str(root),
+                "ingest-run-demo-ingest",
+                "apply",
+                "--status",
+                "completed",
+                "--note",
+                "wiki pages updated",
+            )
+            self.assertIn("Step `apply`: completed", updated.stdout)
+            payload = json.loads(run_json.read_text(encoding="utf-8"))
+            apply_step = next(step for step in payload["steps"] if step["name"] == "apply")
+            self.assertEqual(apply_step["status"], "completed")
+            self.assertIn("wiki pages updated", apply_step["notes"])
+            self.assertEqual(payload["current_step"], "validate")
+
     def test_capture_extracts_docx_text(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
@@ -1095,6 +1155,286 @@ status: active
             self.assertIn("retrieval_path_count: 0", prompt_text)
             self.assertIn("retrieval_fallback_from: path", prompt_text)
             self.assertIn("fell back to graph retrieval", prompt_text)
+
+    def test_answer_graph_rerank_feeds_reranked_context_to_model(self) -> None:
+        requests: list[dict[str, object]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                requests.append(payload)
+                if len(requests) == 1:
+                    body = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "selected": [
+                                                {
+                                                    "slug": "beta",
+                                                    "rank": 1,
+                                                    "reason": "Beta explains the linked control surface needed for the answer.",
+                                                }
+                                            ],
+                                            "gaps": ["Only local wiki graph candidates were available."],
+                                        }
+                                    )
+                                }
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 70, "completion_tokens": 20, "total_tokens": 90},
+                    }
+                else:
+                    body = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "## Evidence Used\n- [[beta]] - used - source: raw/captures/beta.md\n- [[alpha]] - used - source: raw/captures/alpha.md\n\n## Answer\nBeta should be considered before Alpha because the rerank trace identified [[beta]] as the linked control surface.\n\n## Gaps\nOnly local wiki graph candidates were available."
+                                }
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+                    }
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_key = os.environ.get("CWIKI_TEST_GLM_KEY")
+        os.environ["CWIKI_TEST_GLM_KEY"] = "test-key"
+        try:
+            with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+                root = Path(tmp)
+                run_cwiki("init", str(root), "--domain", "Graph rerank answer test")
+                (root / "wiki" / "concepts" / "alpha.md").write_text(
+                    """---
+title: Alpha
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Alpha
+
+Alpha workflow links to [[beta]].
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Alpha links to beta. | raw/captures/alpha.md | high | 2026-05-10 |
+""",
+                    encoding="utf-8",
+                )
+                (root / "wiki" / "concepts" / "beta.md").write_text(
+                    """---
+title: Beta
+kind: concept
+tags: [test]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Beta
+
+Beta is the linked control surface.
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| Beta is a linked control surface. | raw/captures/beta.md | high | 2026-05-10 |
+""",
+                    encoding="utf-8",
+                )
+
+                result = run_cwiki(
+                    "answer",
+                    str(root),
+                    "How should alpha use its linked workflow?",
+                    "--retrieval",
+                    "graph",
+                    "--graph-rerank",
+                    "--provider",
+                    "glm",
+                    "--model",
+                    "glm-test",
+                    "--api-key-env",
+                    "CWIKI_TEST_GLM_KEY",
+                    "--base-url",
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                )
+                self.assertIn("Saved answer:", result.stdout)
+                self.assertEqual(len(requests), 2)
+                self.assertIn("LLM Graph Rerank Request", requests[0]["messages"][1]["content"])
+                self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
+                answer_prompt = requests[1]["messages"][1]["content"]
+                self.assertIn("retrieval_graph_rerank: completed", answer_prompt)
+                self.assertIn("Beta explains the linked control surface", answer_prompt)
+                self.assertLess(answer_prompt.index("- [[beta]]"), answer_prompt.index("- [[alpha]]"))
+                usage_records = [
+                    json.loads(line)
+                    for line in (root / ".cwiki" / "usage" / "llm-usage.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual([record["operation"] for record in usage_records], ["graph-rerank", "answer"])
+                self.assertEqual(usage_records[0]["usage"]["total_tokens"], 90)
+                self.assertEqual(usage_records[1]["usage"]["total_tokens"], 150)
+        finally:
+            if old_key is None:
+                os.environ.pop("CWIKI_TEST_GLM_KEY", None)
+            else:
+                os.environ["CWIKI_TEST_GLM_KEY"] = old_key
+            server.shutdown()
+            server.server_close()
+
+    def test_answer_records_usage_cost_and_reports_it(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "## Evidence Used\n"
+                                    "- [[retrieval]] - used - source: raw/captures/retrieval.md\n\n"
+                                    "## Answer\n"
+                                    "Retrieval should collect source-backed wiki pages before synthesis, then cite [[retrieval]] near factual claims.\n\n"
+                                    "## Gaps\n"
+                                    "Only the local test wiki was available."
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 80, "completion_tokens": 40, "total_tokens": 120},
+                }
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        env_names = [
+            "CWIKI_TEST_GLM_KEY",
+            "CWIKI_COST_GLM_USAGE_TEST_MODEL_INPUT_PER_1M",
+            "CWIKI_COST_GLM_USAGE_TEST_MODEL_OUTPUT_PER_1M",
+            "CWIKI_COST_CURRENCY",
+        ]
+        old_env = {name: os.environ.get(name) for name in env_names}
+        os.environ["CWIKI_TEST_GLM_KEY"] = "test-key"
+        os.environ["CWIKI_COST_GLM_USAGE_TEST_MODEL_INPUT_PER_1M"] = "1"
+        os.environ["CWIKI_COST_GLM_USAGE_TEST_MODEL_OUTPUT_PER_1M"] = "3"
+        os.environ["CWIKI_COST_CURRENCY"] = "USD"
+        try:
+            with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+                root = Path(tmp)
+                run_cwiki("init", str(root), "--domain", "Usage cost test")
+                (root / "wiki" / "concepts" / "retrieval.md").write_text(
+                    """---
+title: Retrieval
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# Retrieval
+
+Retrieval collects source-backed wiki pages before synthesis.
+""",
+                    encoding="utf-8",
+                )
+
+                result = run_cwiki(
+                    "answer",
+                    str(root),
+                    "What should retrieval do?",
+                    "--provider",
+                    "glm",
+                    "--model",
+                    "usage-test-model",
+                    "--api-key-env",
+                    "CWIKI_TEST_GLM_KEY",
+                    "--base-url",
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                )
+                self.assertIn("LLM usage: input=80 output=40 total=120 cost=0.000200 USD (estimated)", result.stdout)
+                answer_file = next((root / ".cwiki" / "answers").glob("answer-*.md"))
+                answer_text = answer_file.read_text(encoding="utf-8")
+                self.assertIn("llm_total_tokens: 120", answer_text)
+                self.assertIn("llm_estimated_cost: 0.00020000", answer_text)
+                self.assertIn("## LLM Usage", answer_text)
+
+                usage_records = [
+                    json.loads(line)
+                    for line in (root / ".cwiki" / "usage" / "llm-usage.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(len(usage_records), 1)
+                self.assertEqual(usage_records[0]["operation"], "answer")
+                self.assertEqual(usage_records[0]["usage"]["input_tokens"], 80)
+                self.assertEqual(usage_records[0]["cost"]["total_cost"], 0.0002)
+
+                report = run_cwiki("usage-report", str(root), "--operation", "answer")
+                self.assertIn("- Total tokens: 120", report.stdout)
+                self.assertIn("| answer | 1 | 80 | 40 | 120 | 0.000200 USD |", report.stdout)
+
+                json_report = run_cwiki("usage-report", str(root), "--json")
+                payload = json.loads(json_report.stdout)
+                self.assertEqual(payload["summary"]["records"], 1)
+                self.assertEqual(payload["summary"]["total_tokens"], 120)
+                self.assertEqual(payload["summary"]["costs_by_currency"]["USD"], 0.0002)
+
+                manual = run_cwiki(
+                    "usage-log",
+                    str(root),
+                    "--operation",
+                    "ingest",
+                    "--provider",
+                    "agent-platform",
+                    "--model",
+                    "current-agent-model",
+                    "--input-tokens",
+                    "12000",
+                    "--output-tokens",
+                    "1800",
+                    "--estimated-cost",
+                    "0.05",
+                    "--currency",
+                    "USD",
+                    "--artifact",
+                    "wiki/synthesis.md",
+                )
+                self.assertIn("Recorded usage:", manual.stdout)
+                ingest_report = run_cwiki("usage-report", str(root), "--operation", "ingest")
+                self.assertIn("| ingest | 1 | 12000 | 1800 | 13800 | 0.050000 USD |", ingest_report.stdout)
+        finally:
+            for name, value in old_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            server.shutdown()
+            server.server_close()
 
     def test_eval_answer_reports_retrieval_quality_from_query_prompt(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -1384,6 +1724,114 @@ No known gaps from the inspected wiki context.
             self.assertIn("Source file: `.cwiki/eval/agent-assisted-eval.md`", result.stdout)
             self.assertIn("当前 agent 模型认为答案证据充足", result.stdout)
 
+    def test_eval_answer_web_on_gaps_creates_followup_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
+            root = Path(tmp)
+            run_cwiki("init", str(root), "--domain", "Web gap eval test")
+            (root / "wiki" / "concepts" / "llm-wiki.md").write_text(
+                """---
+title: LLM Wiki
+kind: concept
+tags: [llm-wiki, rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# LLM Wiki
+
+LLM Wiki 把来源编译成可持续维护的 markdown 知识层，并通过 [[rag]] 对比传统检索增强。
+
+## Claim Ledger
+
+| Claim | Source | Confidence | Last checked |
+|---|---|---:|---|
+| LLM Wiki 强调由 LLM 写入和维护 wiki 层。 | raw/captures/llm-wiki.md | high | 2026-05-10 |
+""",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "concepts" / "rag.md").write_text(
+                """---
+title: RAG
+kind: concept
+tags: [rag]
+sources: 1
+updated: 2026-05-10
+status: active
+---
+
+# RAG
+
+RAG 在回答时检索上下文，常用于知识问答。
+""",
+                encoding="utf-8",
+            )
+            answer = root / ".cwiki" / "answers" / "answer-gap.md"
+            answer.parent.mkdir(parents=True, exist_ok=True)
+            answer.write_text(
+                """---
+title: Answer - LLM Wiki vs RAG
+tags: [answer]
+sources: 1
+updated: 2026-05-10
+status: draft
+question: 当处理什么业务场景时，选择 llm wiki 而不是 RAG？
+---
+
+# Answer - LLM Wiki vs RAG
+
+## Question
+
+当处理什么业务场景时，选择 llm wiki 而不是 RAG？
+
+## Answer
+
+当业务需要长期沉淀综合结论、持续维护页面和交叉引用时，可以考虑 [[llm-wiki]]，其本地依据来自 `raw/captures/llm-wiki.md`。
+
+## Gaps
+
+缺少真实企业案例、量化指标对比、成本 ROI，以及从 RAG 迁移到 LLM Wiki 的实施指南。
+
+## Relevant Pages
+
+- [[llm-wiki]] (10) `wiki/concepts/llm-wiki.md`
+- [[rag]] (4) `wiki/concepts/rag.md`
+""",
+                encoding="utf-8",
+            )
+
+            result = run_cwiki("eval-answer", str(root), str(answer), "--no-write", "--web-on-gaps")
+
+            self.assertIn("## 联网补证任务", result.stdout)
+            self.assertIn("状态：`created`", result.stdout)
+            self.assertIn("缺少量化指标", result.stdout)
+            self.assertIn("Evidence fusion prompt", result.stdout)
+            prompts = list((root / ".cwiki" / "prompts").glob("web-query-*.md"))
+            fusions = list((root / ".cwiki" / "prompts").glob("fusion-*.md"))
+            briefs = list((root / ".cwiki" / "briefs").glob("web-brief-*.md"))
+            research = list((root / ".cwiki" / "web-research").glob("web-research-*.md"))
+            captures = list((root / ".cwiki" / "web-captures").glob("web-captures-*.md"))
+            gap_reports = list((root / ".cwiki" / "web-gaps").glob("web-gap-*.md"))
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(fusions), 1)
+            self.assertEqual(len(briefs), 1)
+            self.assertEqual(len(research), 1)
+            self.assertEqual(len(captures), 1)
+            self.assertEqual(len(gap_reports), 1)
+            prompt_text = prompts[0].read_text(encoding="utf-8")
+            self.assertIn("## Research Focus", prompt_text)
+            self.assertIn("量化指标", prompt_text)
+            self.assertIn("迁移", prompt_text)
+            self.assertIn("Search the web for up to 6 high-quality sources", prompt_text)
+            self.assertIn("wiki-agent-browser", prompt_text)
+            self.assertIn("Evidence Fusion Prompt", fusions[0].read_text(encoding="utf-8"))
+            self.assertIn("web_mode: enabled", research[0].read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", captures[0].read_text(encoding="utf-8"))
+            self.assertIn("cwiki capture . <url> --title", captures[0].read_text(encoding="utf-8"))
+            gap_report_text = gap_reports[0].read_text(encoding="utf-8")
+            self.assertIn("Web Gap Follow-up", gap_report_text)
+            self.assertIn("Web capture checklist", gap_report_text)
+
     def test_web_ask_creates_browser_prompt_with_traceable_source_rules(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
             root = Path(tmp)
@@ -1419,6 +1867,7 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("Created web query prompt:", result.stdout)
             self.assertIn("Created web brief:", result.stdout)
             self.assertIn("Created web research workspace:", result.stdout)
+            self.assertIn("Created web capture checklist:", result.stdout)
             self.assertIn("Created evidence fusion prompt:", result.stdout)
             self.assertIn("Evidence weights: wiki=0.7, web=0.3, web_mode=enabled", result.stdout)
             self.assertIn("the CLI does not browse by itself", result.stdout)
@@ -1428,10 +1877,12 @@ Retrieval finds relevant evidence before synthesis.
             fusion = root / ".cwiki" / "prompts" / f"fusion-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             brief = root / ".cwiki" / "briefs" / f"web-brief-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
+            captures = root / ".cwiki" / "web-captures" / f"web-captures-{dt.date.today().isoformat()}-what-changed-recently-about-retrieval.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(fusion.exists())
             self.assertTrue(brief.exists())
             self.assertTrue(research.exists())
+            self.assertTrue(captures.exists())
             prompt_text = prompt.read_text(encoding="utf-8")
             self.assertIn("wiki-agent-browser", prompt_text)
             self.assertIn("Search the web for up to 4 high-quality sources", prompt_text)
@@ -1439,8 +1890,12 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("For every external factual claim, cite a URL", prompt_text)
             self.assertIn("Local wiki weight: 0.7", prompt_text)
             self.assertIn("Web search weight: 0.3", prompt_text)
+            self.assertIn("web-captures", prompt_text)
             self.assertIn("web_mode: enabled", research.read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", captures.read_text(encoding="utf-8"))
+            self.assertIn("Source Capture Table", captures.read_text(encoding="utf-8"))
             self.assertIn("Evidence Fusion Prompt", fusion.read_text(encoding="utf-8"))
+            self.assertIn("Web Capture Checklist", fusion.read_text(encoding="utf-8"))
 
     def test_web_ask_can_disable_web_research(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
@@ -1458,9 +1913,11 @@ Retrieval finds relevant evidence before synthesis.
             self.assertIn("web_mode=disabled", result.stdout)
             prompt = root / ".cwiki" / "prompts" / f"web-query-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
             research = root / ".cwiki" / "web-research" / f"web-research-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
+            captures = root / ".cwiki" / "web-captures" / f"web-captures-{dt.date.today().isoformat()}-answer-from-local-wiki-only.md"
             self.assertIn("Web mode: disabled", prompt.read_text(encoding="utf-8"))
             self.assertIn("Search the web for up to 0 high-quality sources", prompt.read_text(encoding="utf-8"))
             self.assertIn("web_mode: disabled", research.read_text(encoding="utf-8"))
+            self.assertIn("Web mode: disabled", captures.read_text(encoding="utf-8"))
 
     def test_web_ask_reads_defaults_from_env_file(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cwiki-") as tmp:
