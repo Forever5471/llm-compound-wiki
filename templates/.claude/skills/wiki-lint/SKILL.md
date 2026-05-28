@@ -27,4 +27,4 @@ When fixing:
 - preserve the intended wiki section structure from `WIKI_SCHEMA.md`
 - append the maintenance action to `wiki/log.md`
 
-After fixes, run `cwiki index .` and then `cwiki lint .` again.
+After fixes, run `cwiki ingest-finalize .` and then `cwiki lint .` again.

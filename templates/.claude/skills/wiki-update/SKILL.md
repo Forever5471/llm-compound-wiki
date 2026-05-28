@@ -21,8 +21,8 @@ Updates must be traceable.
    - Update `synthesis.md` every time with any changed integrated thesis, stable claims, contradictions, evidence inventory, or a clear note that the update did not promote a thesis and why.
    - If either page still has `status: seed`, replace seed guidance with real wiki-specific content once any real wiki page exists. Do not leave generic placeholder prose in a wiki that already contains ingested knowledge.
 8. In your final note, explicitly summarize what changed in `wiki/overview.md` and `wiki/synthesis.md`.
-9. Run `cwiki index .`.
-10. Append to `wiki/log.md`.
+9. Run `cwiki ingest-finalize .` to refresh index, graph, hot/stale, link suggestions, backlink indexes, log shards, and `.cwiki/manifest.json`.
+10. Review `wiki/indexes/link-suggestions.md` and run `cwiki backlinks check .` when links changed.
 11. If the agent platform shows token or cost numbers for this update, record them with `cwiki usage-log . --operation update --provider agent-platform --model <visible-model-name> ...`.
 
 If new evidence contradicts old content, preserve the contradiction explicitly until the user or sources resolve it.

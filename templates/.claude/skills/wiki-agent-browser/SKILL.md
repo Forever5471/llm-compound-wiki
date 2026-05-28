@@ -62,8 +62,7 @@ If web evidence should become durable wiki knowledge:
 3. Process the generated `.cwiki/prompts/ingest-*.md` with `wiki-ingest`.
 4. Preserve source language unless the user asks for translation.
 5. Update affected wiki pages with source-backed claim ledger rows.
-6. Run `cwiki index .`.
-7. Append to `wiki/log.md`.
+6. Run `cwiki ingest-finalize .` after canonical wiki edits.
 
 ## Rules
 

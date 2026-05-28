@@ -101,6 +101,11 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 │   └── .agents/skills/       Compatibility skill entrypoints
 ├── raw/                      Private immutable sources, ignored by git
 ├── .cwiki/prompts/           Generated ingest prompts, ignored by git
+├── .cwiki/sources/           Append-only source manifest and source index
+├── .cwiki/security/          Raw source safety/trust audit ledger
+├── .cwiki/index/             Machine-readable retrieval indexes
+├── .cwiki/log/               Machine-readable operation events
+├── .cwiki/experience/        Implicit experience observations and candidates
 ├── .cwiki/usage/             Local LLM usage ledger, ignored by git
 ├── wiki/
 │   ├── overview.md           Durable map of the knowledge base
@@ -109,8 +114,11 @@ LLM Compound Wiki separates the deterministic local tool layer from the intellig
 │   ├── entities/             People, organizations, products, projects
 │   ├── concepts/             Ideas, theories, methods, terms
 │   ├── comparisons/          Compare/contrast and decision pages
-│   ├── index.md              Content catalog
-│   └── log.md                Append-only operation log
+│   ├── lessons/              Promoted operational lessons and implicit experience
+│   ├── indexes/              Agent-readable generated index shards
+│   ├── logs/                 Agent-readable log shards and archives
+│   ├── index.md              Short navigation entry point
+│   └── log.md                Short operation status entry point
 ```
 
 ## Quick Start
@@ -232,18 +240,40 @@ cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [-
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
 cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
-cwiki status <dir>
+cwiki log-compact <dir> [--recent 25]
+cwiki ingest-finalize <dir> [--source-id src_...] [--pages wiki/concepts/example.md ...]
+cwiki link-suggest <dir> [--json]
+cwiki backlinks check <dir> [--json]
+cwiki backlinks apply <dir>
+cwiki experience list <dir> [--status needs_review]
+cwiki experience promote <dir> <candidate> [--target wiki/lessons/example.md]
+cwiki experience reject <dir> <candidate> --reason "..."
+cwiki status <dir> [run] [--json] [--no-refresh]
 cwiki ingest-plan <dir> [--source <raw-file>] [--prompt <prompt-file>] [--run-id <id>]
 cwiki ingest-status <dir> [run]
 cwiki ingest-step <dir> [run] <step> --status pending|in_progress|completed|blocked [--note "..."]
-cwiki capture <dir> <file-or-url> [--title "..."]
+cwiki capture <dir> <file-or-url> [--title "..."] [--force] [--dedupe strict|near|off]
 ```
 
-`capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
+`capture` does not summarize by itself. It creates a raw-source record and an ingest prompt for your agent. It also records source metadata under `.cwiki/sources/source-manifest.jsonl`, writes `.cwiki/sources/source-index.json`, scans for obvious prompt-injection/secret/PII/file risks under `.cwiki/security/raw-audit.jsonl`, refreshes `.cwiki/manifest.json`, and skips exact duplicate captures unless `--force` or `--dedupe off` is used. The agent then follows `WIKI_SCHEMA.md` and the skill files to compile the source into the right `wiki/` sections.
+
+`cwiki status` is the global health dashboard. It refreshes `.cwiki/manifest.json`, `wiki/hot.md`, `wiki/stale.md`, `.cwiki/index/cross-link-suggestions.json`, and `.cwiki/index/backlinks.json`, then prints source, security, knowledge-health, and ingest-run status. Use `--json` for agent platforms.
+
+`cwiki ingest-finalize` is the deterministic post-ingest closeout. After an agent has compiled a captured source into canonical wiki pages, run it to rebuild `wiki/index.md`, `wiki/indexes/*`, `.cwiki/graph/*`, `wiki/log.md`/`wiki/logs/*`, `wiki/hot.md`, `wiki/stale.md`, cross-link suggestions, backlink indexes, and `.cwiki/manifest.json`.
+
+`cwiki link-suggest` detects high-confidence mentions of existing page titles or aliases that are not yet `[[wikilinks]]`. It writes review-only suggestions to `wiki/indexes/link-suggestions.md` and `.cwiki/index/cross-link-suggestions.json`.
+
+`cwiki backlinks check` writes a stable backlink index for agent platforms. `cwiki backlinks apply` adds managed backlink blocks to canonical wiki pages. Those managed blocks are ignored by graph extraction, so they improve browsing without creating synthetic graph edges.
+
+`cwiki index` now writes two index layers: short agent-facing `wiki/index.md` plus Markdown shards under `wiki/indexes/`, and machine-readable JSON under `.cwiki/index/`. `wiki/index.md` is a route map, not a database.
+
+`cwiki log-compact` keeps `wiki/log.md` short for agent-platform use and moves historical detail into `wiki/logs/` plus machine events under `.cwiki/log/events.jsonl`.
+
+`cwiki experience` manages implicit experience candidates produced by `wiki-dream`: list candidates, promote reviewed lessons into canonical `wiki/lessons/`, or reject candidates into `.cwiki/experience/rejected/`.
 
 `ingest-plan` creates a recoverable ingest run under `.cwiki/ingest-runs/`. Use `status` or `ingest-status` to see the latest run, and `ingest-step` to mark progress through `status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval`. This does not replace the agent-owned wiki writing step; it gives the workflow a deterministic state file so a run can resume after interruption.
 
-`ask` does not call an LLM by default. It uses hybrid retrieval over the compiled wiki: keyword retrieval for exact matches, lightweight local hash-vector retrieval to reduce synonym and long-document misses, and relationship retrieval over `[[wikilink]]` neighbors. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer. Add `--graph-rerank` only when you want the configured model to semantically rerank graph/path/synthesis retrieval candidates before the prompt is written.
+`ask` does not call an LLM by default. It uses progressive, budgeted retrieval over the compiled wiki: `auto` first selects `direct`, `graph`, `path`, or `synthesis` based on question complexity; each strategy then runs only the needed stages and records skipped stages, budgets, and early-stop reasons in Retrieval Trace. Keyword retrieval handles exact matches, lightweight local hash-vector retrieval reduces synonym and long-document misses, and relationship retrieval follows `[[wikilink]]` plus typed relationship neighbors when useful. It then writes a model-oriented query prompt under `.cwiki/prompts/` and a human-readable evidence brief under `.cwiki/briefs/`. The brief is useful for quick inspection; hand the prompt to Codex, Claude Code, or another agent for a polished answer. Add `--graph-rerank` only when you want the configured model to semantically rerank graph/path/synthesis retrieval candidates before the prompt is written.
 
 The lightweight vector retrieval is not an embedding API. It tokenizes local Markdown, hashes tokens into a fixed-size vector, and ranks pages with cosine similarity plus keyword and link-graph boosts. It is zero-dependency and deterministic, but less semantically powerful than model embeddings. For medium or large wikis, the intended extension path is an optional embedding/vector coarse-retrieval layer before the existing wiki and link-graph ranking.
 
@@ -251,7 +281,7 @@ For agent-platform Q&A, use the hybrid query workflow. Start with `cwiki ask` so
 
 See [docs/answering-workflow.md](docs/answering-workflow.md) for the full answering workflow.
 
-`link-graph` and `link-graph-report` generate the current link graph from compiled wiki frontmatter, claim ledgers, and `[[wikilinks]]`. The older `graph` and `graph-report` commands are compatibility aliases. This is a wikilink navigation graph, not a typed knowledge graph or semantic entity-relation graph. Phase 1 does not call an LLM and does not read raw source bodies: pages are nodes, wikilinks are edges, and outputs are `.cwiki/graph/graph.json` plus `.cwiki/graph/graph.md`. `path` finds the shortest undirected wikilink path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree.
+`link-graph` and `link-graph-report` generate the current graph from compiled wiki frontmatter, claim ledgers, `[[wikilinks]]`, and optional `## Relationships` tables. The older `graph` and `graph-report` commands are compatibility aliases. Wikilinks remain navigation edges; typed relationship rows become source-backed graph hints such as `DEPENDS_ON`, `CONTRADICTS`, or `EVIDENCE_FOR`. The graph build does not call an LLM and does not read raw source bodies. Outputs include `.cwiki/graph/graph.json`, `.cwiki/graph/typed-graph.json`, and `.cwiki/graph/graph.md`. `path` finds the shortest graph path between two pages, and `explain` prints one page's inbound links, outbound links, claim sources, and graph degree.
 
 `ask --retrieval auto|direct|graph|path|synthesis` uses this layer to record a Retrieval Trace in query prompts:
 

@@ -13,19 +13,19 @@ This document describes the recommended question-answering paths for an initiali
 
 Use this when you want a reproducible evidence boundary before an agent writes final prose.
 
-Use `--retrieval auto|direct|graph|path|synthesis` to control how much graph-aware context is added. `auto` classifies question complexity and records the chosen strategy in the prompt's Retrieval Trace.
+Use `--retrieval auto|direct|graph|path|synthesis` to control how much graph-aware context is added. `auto` classifies question complexity, selects a plan, runs only the needed stages inside that plan, and records budgets, skipped stages, and early-stop reasons in the prompt's Retrieval Trace.
 
 Add `--graph-rerank` when you want the configured model to rerank graph/path/synthesis final context candidates before the prompt is written. The rerank status, reasons, and gaps are recorded in Retrieval Trace.
 
 ### Layered retrieval strategy
 
 - `direct`: direct keyword/vector hits only. Use for narrow fact lookup.
-- `graph`: direct hits plus inbound/outbound wikilink neighbors from the generated link graph. Use when nearby concepts, roles, modules, or related entities may matter.
+- `graph`: direct hits plus inbound/outbound wikilink or typed-relationship neighbors from the generated graph. Use when nearby concepts, roles, modules, or related entities may matter.
 - `path`: graph context plus shortest-path evidence between top hits. Use for workflows, mechanisms, dependencies, relationships, and how/why questions.
 - `synthesis`: direct, graph, path, overview/synthesis, and central-node context. Use for broad summaries, comparisons, tradeoffs, strategy, and evaluation.
 - `auto`: CLI-selected layer. If `auto` selects `path` but finds no path evidence, it falls back to `graph` and records the fallback in Retrieval Trace.
 
-Graph retrieval does not treat the graph as a fact source. `.cwiki/graph/graph.json` is a wikilink navigation layer, not a typed knowledge graph: Direct Hits are primary evidence, Graph-Expanded Pages are nearby context, Path Evidence explains relationships, and Final Context Pages define the reproducible evidence pack.
+Graph retrieval does not treat the graph as a fact source. `.cwiki/graph/graph.json` is a navigation layer built from wikilinks and source-backed `## Relationships` rows: Direct Hits are primary evidence, Graph-Expanded Pages are nearby context, Path Evidence explains relationships, and Final Context Pages define the reproducible evidence pack.
 
 ### CLI model answering
 

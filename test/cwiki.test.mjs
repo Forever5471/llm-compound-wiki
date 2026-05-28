@@ -25,15 +25,22 @@ test("init creates a usable wiki", async () => {
   assert.equal(existsSync(path.join(dir, "CLAUDE.md")), true);
   assert.equal(existsSync(path.join(dir, "AGENTS.md")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "index.md")), true);
+  assert.equal(existsSync(path.join(dir, "wiki", "hot.md")), true);
+  assert.equal(existsSync(path.join(dir, "wiki", "stale.md")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "overview.md")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "synthesis.md")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "summaries")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "entities")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "concepts")), true);
   assert.equal(existsSync(path.join(dir, "wiki", "comparisons")), true);
+  assert.equal(existsSync(path.join(dir, "wiki", "lessons")), true);
+  assert.equal(existsSync(path.join(dir, "wiki", "indexes")), true);
+  assert.equal(existsSync(path.join(dir, "wiki", "logs")), true);
   assert.equal(existsSync(path.join(dir, ".claude", "skills", "wiki-init", "SKILL.md")), true);
   assert.equal(existsSync(path.join(dir, ".agents", "skills", "wiki-ingest", "SKILL.md")), true);
   assert.equal(existsSync(path.join(dir, ".claude", "skills", "wiki-agent-browser", "SKILL.md")), true);
+  assert.equal(existsSync(path.join(dir, ".claude", "skills", "wiki-dream", "SKILL.md")), true);
+  assert.equal(existsSync(path.join(dir, ".cwiki", "manifest.json")), true);
 
   const schema = await readFile(path.join(dir, "WIKI_SCHEMA.md"), "utf8");
   assert.match(schema, /Domain: Test knowledge/);
@@ -132,5 +139,6 @@ test("capture creates raw record and ingest prompt", async () => {
   const rawDir = path.join(dir, "raw", "captures");
   assert.equal(existsSync(rawDir), true);
   const prompts = await readdir(path.join(dir, ".cwiki", "prompts"));
-  assert.equal(prompts.some((name) => /^ingest-\d{4}-\d{2}-\d{2}-some-article\.md$/.test(name)), true);
+  assert.equal(prompts.some((name) => /^ingest-\d{4}-\d{2}-\d{2}-some-article-[a-f0-9]{8}\.md$/.test(name)), true);
+  assert.equal(existsSync(path.join(dir, ".cwiki", "sources", "source-manifest.jsonl")), true);
 });

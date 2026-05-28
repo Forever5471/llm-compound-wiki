@@ -98,6 +98,11 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 │   └── .agents/skills/       兼容其他 agent 的入口
 ├── raw/                      用户私有原始材料，默认不进 git
 ├── .cwiki/prompts/           生成的 ingest 工作提示，默认不进 git
+├── .cwiki/sources/           追加式来源账本和来源索引
+├── .cwiki/security/          raw 来源安全和可信审计
+├── .cwiki/index/             机器可读检索索引
+├── .cwiki/log/               机器可读操作事件
+├── .cwiki/experience/        隐性经验观察和候选
 ├── .cwiki/usage/             本地 LLM 用量台账，默认不进 git
 ├── wiki/
 │   ├── overview.md           整个知识库的全局地图
@@ -106,8 +111,11 @@ LLM Compound Wiki 把确定性的本地工具层和智能 agent 层分开。
 │   ├── entities/             人物、组织、产品、项目等实体
 │   ├── concepts/             概念、方法、理论、术语
 │   ├── comparisons/          对比、取舍和决策矩阵
-│   ├── index.md              全库索引
-│   └── log.md                追加式操作日志
+│   ├── lessons/              被提升后的操作经验和隐性经验
+│   ├── indexes/              agent 可读的分片索引
+│   ├── logs/                 agent 可读的日志分片和归档
+│   ├── index.md              短导航入口
+│   └── log.md                短操作状态入口
 ```
 
 ## 快速开始
@@ -218,18 +226,40 @@ cwiki eval-all <dir> [--answer <answer-file>] [--wiki-only] [--output <file>] [-
 cwiki eval-schedule <dir> --every-days 7 [--llm] [--run-if-due]
 cwiki usage-report <dir> [--operation answer] [--artifact <path>] [--question "..."] [--json]
 cwiki usage-log <dir> --operation ingest --provider agent-platform --model current-agent-model --input-tokens 1000 --output-tokens 500
-cwiki status <dir>
+cwiki log-compact <dir> [--recent 25]
+cwiki ingest-finalize <dir> [--source-id src_...] [--pages wiki/concepts/example.md ...]
+cwiki link-suggest <dir> [--json]
+cwiki backlinks check <dir> [--json]
+cwiki backlinks apply <dir>
+cwiki experience list <dir> [--status needs_review]
+cwiki experience promote <dir> <candidate> [--target wiki/lessons/example.md]
+cwiki experience reject <dir> <candidate> --reason "..."
+cwiki status <dir> [run] [--json] [--no-refresh]
 cwiki ingest-plan <dir> [--source <raw-file>] [--prompt <prompt-file>] [--run-id <id>]
 cwiki ingest-status <dir> [run]
 cwiki ingest-step <dir> [run] <step> --status pending|in_progress|completed|blocked [--note "..."]
-cwiki capture <dir> <file-or-url> [--title "..."]
+cwiki capture <dir> <file-or-url> [--title "..."] [--force] [--dedupe strict|near|off]
 ```
 
-`capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
+`capture` 不会假装自己已经理解了来源。它会把文件或 URL 捕获到 `raw/captures/`，并在 `.cwiki/prompts/` 里生成一份 ingest prompt。同时它会把来源元数据写入 `.cwiki/sources/source-manifest.jsonl`，生成 `.cwiki/sources/source-index.json`，把明显的 prompt injection、secret、PII、文件风险写入 `.cwiki/security/raw-audit.jsonl`，刷新 `.cwiki/manifest.json`，并默认跳过完全重复的来源。需要强制重复捕获时使用 `--force` 或 `--dedupe off`。随后由 agent 按 `WIKI_SCHEMA.md` 和 `.agents/skills/` 的流程把来源编译进 `wiki/` 的合适分区。
+
+`cwiki status` 是全局健康仪表盘。它会刷新 `.cwiki/manifest.json`、`wiki/hot.md`、`wiki/stale.md`、`.cwiki/index/cross-link-suggestions.json` 和 `.cwiki/index/backlinks.json`，然后输出来源、安全、知识健康和 ingest run 状态。agent 平台可用 `--json`。
+
+`cwiki ingest-finalize` 是摄入后的确定性收尾命令。agent 把来源编译进 canonical wiki 页面之后，运行它来重建 `wiki/index.md`、`wiki/indexes/*`、`.cwiki/graph/*`、`wiki/log.md`/`wiki/logs/*`、`wiki/hot.md`、`wiki/stale.md`、cross-link 建议、backlink 索引和 `.cwiki/manifest.json`。
+
+`cwiki link-suggest` 会发现页面正文里高置信提到了已有页面标题或 alias、但还没有写成 `[[wikilink]]` 的位置。它只生成待审建议：`wiki/indexes/link-suggestions.md` 和 `.cwiki/index/cross-link-suggestions.json`。
+
+`cwiki backlinks check` 会生成适合 agent 平台读取的稳定 backlink 索引。`cwiki backlinks apply` 会把受管理的 backlink 区块写入 canonical wiki 页面；这些区块会被图谱抽取忽略，因此能提升浏览体验，但不会制造合成图谱边。
+
+`cwiki index` 现在会生成两层索引：短的 agent 入口 `wiki/index.md` 和 `wiki/indexes/` 下的 Markdown 分片，以及 `.cwiki/index/` 下的机器 JSON 索引。`wiki/index.md` 是路线图，不是数据库。
+
+`cwiki log-compact` 会保持 `wiki/log.md` 短小，把历史细节放到 `wiki/logs/`，机器事件放到 `.cwiki/log/events.jsonl`。
+
+`cwiki experience` 管理 `wiki-dream` 产生的隐性经验候选：列出候选、把人工确认后的经验提升到正式 `wiki/lessons/`，或把候选拒绝到 `.cwiki/experience/rejected/`。
 
 `ingest-plan` 会在 `.cwiki/ingest-runs/` 下创建一次可恢复的摄入 run。用 `status` 或 `ingest-status` 查看最新状态，用 `ingest-step` 标记 `status -> ingest-plan -> apply -> validate -> index -> link-graph -> eval` 的推进情况。它不替代 agent 编写 wiki 的步骤，而是给流程一份确定性的状态文件，方便中断后继续。
 
-`ask` 默认不会直接调用大模型。它会用混合检索搜索已经编译好的 wiki：关键词检索负责精确命中，轻量本地 hash 向量检索负责缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 把相邻页面补进上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。只有显式加 `--graph-rerank` 时，`ask` 才会调用 `.env` 或命令行配置的大模型，对 graph/path/synthesis 检索候选做语义重排。
+`ask` 默认不会直接调用大模型。它会用“复杂度选策略 + 策略内渐进执行 + 预算早停”的方式检索已经编译好的 wiki：`auto` 先根据问题复杂度选择 `direct`、`graph`、`path` 或 `synthesis`，每个策略只运行必要阶段，并在 Retrieval Trace 里记录跳过阶段、预算和早停原因。关键词检索负责精确命中，轻量本地 hash 向量检索缓解同义词和长文本漏召回，关系检索会沿 `[[wikilink]]` 和 typed relationship 邻居补上下文。随后它在 `.cwiki/prompts/` 下生成给模型看的 query prompt，同时在 `.cwiki/briefs/` 下生成给人快速阅读的 evidence brief。brief 适合先粗看，prompt 适合交给 Codex、Claude Code 或其他 agent 生成完整答案。只有显式加 `--graph-rerank` 时，`ask` 才会调用 `.env` 或命令行配置的大模型，对 graph/path/synthesis 检索候选做语义重排。
 
 这里的轻量向量检索不是 embedding API。它会把本地 Markdown 分词，把 token hash 到固定维度向量里，再用 cosine similarity、关键词分数和链接关系加权排序。它零依赖、确定性强，但语义能力不如真正的模型 embedding。中大规模 wiki 的扩展方向，是在现有 wiki 检索和 link graph 排序前增加可选 embedding/vector 粗召回层。
 
@@ -237,7 +267,7 @@ cwiki capture <dir> <file-or-url> [--title "..."]
 
 完整问答流程见 [docs/answering-workflow.zh-CN.md](docs/answering-workflow.zh-CN.md)。
 
-`link-graph` 和 `link-graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger 和 `[[wikilink]]` 生成当前的 link graph。旧命令 `graph` 和 `graph-report` 保留为兼容别名。这里的 graph 是 wikilink 导航图，不是 typed knowledge graph，也不是语义实体关系图谱。第一版不调用大模型，也不读取 `raw/` 正文：页面是 node，wikilink 是 edge，输出 `.cwiki/graph/graph.json` 和 `.cwiki/graph/graph.md`。`path` 用无向 wikilink 图查两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。
+`link-graph` 和 `link-graph-report` 会从已编译 wiki 的 frontmatter、Claim Ledger、`[[wikilink]]` 和可选 `## Relationships` 表生成当前图谱。旧命令 `graph` 和 `graph-report` 保留为兼容别名。`[[wikilink]]` 仍是导航边，typed relationship 行会成为有来源支撑的关系提示，例如 `DEPENDS_ON`、`CONTRADICTS`、`EVIDENCE_FOR`。图谱构建不调用大模型，也不读取 `raw/` 正文；输出 `.cwiki/graph/graph.json`、`.cwiki/graph/typed-graph.json` 和 `.cwiki/graph/graph.md`。`path` 查询两个页面之间的最短路径，`explain` 展示一个页面的入链、出链、来源和度数。
 
 `ask --retrieval auto|direct|graph|path|synthesis` 会基于这层图谱在 query prompt 中记录 Retrieval Trace：
 

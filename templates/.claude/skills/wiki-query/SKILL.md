@@ -30,6 +30,5 @@ Do not answer from memory first. The compiled wiki is the working source of trut
 If the user accepts saving:
 
 1. Update `wiki/synthesis.md`, create `wiki/comparisons/<slug>.md`, or create another fitting page under `wiki/`.
-2. Run `cwiki index .`.
-3. Run `cwiki link-graph-report .` after link changes.
-4. Append to `wiki/log.md`.
+2. Run `cwiki ingest-finalize .`.
+3. Review `wiki/indexes/link-suggestions.md` and `cwiki backlinks check .` when links changed.
